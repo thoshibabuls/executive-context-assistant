@@ -7,13 +7,16 @@ from __future__ import annotations
 
 from sqlalchemy import delete
 
+from eca.identity.checkpoints import purge_checkpoints
 from eca.identity.models import users_table
 from eca.identity.sessions import auth_sessions_table
 from eca.platform.uow import UnitOfWork
 
 
 async def purge_sessions(uow: UnitOfWork) -> None:
+    """Sessions and checkpoints (Phase 2: ``user_checkpoints``) of the user being deleted."""
     await uow.session.execute(delete(auth_sessions_table))
+    await purge_checkpoints(uow)
 
 
 async def delete_user_row(uow: UnitOfWork) -> None:

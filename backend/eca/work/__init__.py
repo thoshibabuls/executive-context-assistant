@@ -83,6 +83,7 @@ from eca.work.service import (
     timeline,
     user_edit,
 )
+from eca.work.time_sweep import TIME_SWEEP_TASK, SweepReport, periodic_tasks, sweep_all, sweep_user
 
 del _pipeline
 
@@ -93,6 +94,7 @@ __all__ = [
     "EXTRACT_HANDLER",
     "LIFECYCLE_COMMANDS",
     "REDACTED",
+    "TIME_SWEEP_TASK",
     "WORK_ITEM_CHANGED",
     "AdjudicationNeeded",
     "AppendResult",
@@ -109,6 +111,7 @@ __all__ = [
     "Mapped",
     "Page",
     "RecomputeReport",
+    "SweepReport",
     "TimelineEvent",
     "WorkItemChanged",
     "WorkItemDetail",
@@ -157,6 +160,7 @@ __all__ = [
     "list_items_page",
     "map_statement",
     "merge_items",
+    "periodic_tasks",
     "priority_candidates",
     "purge_sources",
     "purge_user",
@@ -169,6 +173,8 @@ __all__ = [
     "set_item_priority",
     "set_lifecycle",
     "sources_still_referenced",
+    "sweep_all",
+    "sweep_user",
     "timeline",
     "user_edit",
     "verify_item",

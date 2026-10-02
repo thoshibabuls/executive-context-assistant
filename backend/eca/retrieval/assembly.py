@@ -23,7 +23,8 @@ from eca.retrieval.chunking import estimate_tokens
 from eca.retrieval.coverage import Coverage, build_coverage
 from eca.retrieval.packet import Packet, PacketItem, pack
 from eca.retrieval.plan import DISCOVERY_INTENTS, FocusEntry, Plan, SessionScope, SessionState
-from eca.retrieval.retrievers import RETRIEVERS, Ctx, Retriever
+from eca.retrieval.registry import all_retrievers
+from eca.retrieval.retrievers import Ctx, Retriever
 from eca.retrieval.search import SearchFilters
 from eca.retrieval.temporal import TimeWindow
 from eca.retrieval.traces import record_trace
@@ -170,7 +171,8 @@ async def assemble(
     )
     if window is not None and window.note:
         ctx.notes.append(window.note)
-    retriever = (retrievers or RETRIEVERS).get(plan.intent, RETRIEVERS["unsupported"])
+    table = retrievers or all_retrievers()
+    retriever = table.get(plan.intent, table["unsupported"])
     got = await retriever(ctx)
     effective_window = got.window or window
     coverage = build_coverage(states, now=now, tz=tz, work_hours=settings.work_hours, window=effective_window)

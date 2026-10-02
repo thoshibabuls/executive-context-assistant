@@ -9,6 +9,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from eca.api.assistant import router as assistant_router
 from eca.api.auth import router as auth_router
 from eca.api.connections import router as connections_router
 from eca.api.context import router as context_router
@@ -86,6 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(connections_router)
     app.include_router(work_router)
     app.include_router(context_router)
+    app.include_router(assistant_router)
     return app
 
 

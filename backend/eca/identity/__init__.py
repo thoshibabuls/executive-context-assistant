@@ -5,6 +5,7 @@ Owns (single writer, BACKEND_DESIGN.md §5.1): users, auth_sessions, user_prefer
 """
 
 from eca.identity import events as _events  # registers event types
+from eca.identity.checkpoints import SURFACE, check_surface, get_checkpoints, mark_seen
 from eca.identity.events import USER_CREATED, USER_DELETION_REQUESTED, UserCreated, UserDeletionRequested
 from eca.identity.oauth_state import (
     ConsumedState,
@@ -50,6 +51,7 @@ del _events
 
 __all__ = [
     "SIGNIN_SCOPES",
+    "SURFACE",
     "USER_CREATED",
     "USER_DELETION_REQUESTED",
     "ConsumedState",
@@ -65,6 +67,7 @@ __all__ = [
     "UserSettings",
     "authorization_url",
     "check_csrf",
+    "check_surface",
     "consume_state",
     "create_session",
     "create_state",
@@ -73,11 +76,13 @@ __all__ = [
     "discard_user_states",
     "exchange_code",
     "find_signin_user",
+    "get_checkpoints",
     "get_profile",
     "get_user_settings",
     "link_google_identity",
     "list_active_user_ids",
     "load_session",
+    "mark_seen",
     "pkce_challenge",
     "purge_sessions",
     "request_account_deletion",

@@ -107,7 +107,8 @@ def fold(events: Iterable[FoldEvent]) -> FoldResult:
     slots: dict[str, _Slot] = {}
     result = FoldResult()
     for ev in ordered:
-        result.last_activity_at = ev.occurred_at
+        if ev.actor != "time":  # time events (overdue, due soon, stale) are not activity (§12.7)
+            result.last_activity_at = ev.occurred_at
         if ev.evidence_id and result.first_evidence_at is None:
             result.first_evidence_at = ev.occurred_at
         sets: dict[str, Any] = dict(ev.payload.get("set", {}))
