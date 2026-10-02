@@ -64,6 +64,8 @@ A synthetic, hand-reviewed "executive world": one fictional CTO, ~40 people in 8
 | Identity fixtures | 25 persons | Same person with two addresses; two people with near-identical names; domain changes |
 | Labels | see layout | Two reviewers on commitments, directions, priority pairs and routing labels |
 
+Code and data are separate (slice 0.5 decision). **Data** lives at the repository root under `evals/` (layout below). **Code** (runners, scorecard, statistics, manifest and contamination tools, gate A0) is the Python package `backend/eca_evals/`, installed and checked with the backend (ruff, mypy strict, pytest, import-linter). `eca_evals` may import only `eca`'s public package roots (`eca.<module>`, `eca.platform`); `eca` never imports `eca_evals`; neither imports `google.genai` outside `eca.intelligence`. Commands: `python -m eca_evals <command>` from `backend/`.
+
 ```text
 evals/ai/datasets/world_v1/
   MANIFEST.json                    # version, label schema version, SHA-256 of every file, split of every case
@@ -74,7 +76,10 @@ evals/ai/datasets/world_v1/
     summaries.jsonl                # key points per thread/meeting for coverage scoring
     priority_pairs.jsonl  reminders.jsonl  queries.jsonl
 evals/ai/baselines/<config_hash>.json   # stored results of the current production configuration
-evals/ai/runners/  evals/ai/judges/  evals/ai/reports/
+evals/ai/judges/                        # versioned rubrics (data)
+evals/ai/cassettes/<suite>/             # reviewed recordings on synthetic data (committed)
+evals/ai/cassettes/live/  evals/ai/reports/   # git-ignored
+backend/eca_evals/ai/                   # runners (code)
 ```
 
 ### 3.2 Splits
@@ -90,6 +95,7 @@ Splits are stratified by operation, sender type (VIP, colleague, external, bulk)
 
 ### 3.3 Freeze rules
 
+0. Labels are **draft** until a named human owner (Q12) has reviewed them. `MANIFEST.json` records `labels_status` (`draft` or `reviewed`), the reviewers and the review record. The freeze tool refuses to mark a version released (`frozen: true`) while any label file is draft. CI verifies hashes of draft candidates too, so data changes always go through the manifest tool.
 1. A released version (e.g., `golden-v1.0`) is immutable: CI verifies every file against `MANIFEST.json` hashes and fails on any difference.
 2. Label corrections create a new version (`v1.1`) with a changelog; the current production configuration is re-baselined on the new version before any candidate is compared.
 3. The gate configuration pins the dataset version; changing it is itself a reviewed change.
@@ -361,7 +367,8 @@ Paired bootstrap over cases (10,000 resamples) for differences; cluster resampli
 ## 11. Harness
 
 - Offline runner replays the dataset through the real pipelines with a simulated clock.
-- Cassettes (recorded model responses keyed by role, prompt version and input hash) make CI deterministic and free; any major change forces live runs for affected roles.
+- Cassettes (recorded model responses keyed by role, prompt version and input hash) make CI deterministic and free; any major change forces live runs for affected roles. Format, modes and storage: `BACKEND_DESIGN.md` §5.5.
+- Stub pipelines (deterministic code, no model) let the runners, statistics and scorecard be tested end to end before the real pipelines exist (slice 0.5).
 - Live runs write normal `ai_calls` rows to a dedicated evaluation tenant so cost and latency use the production meter.
 - Reports: JSON + Markdown per run (`evals/ai/reports/<date>_<config_hash>`), including the scorecard and slice tables.
 
@@ -381,5 +388,5 @@ Online metrics: confirm/reject ratio of suggested items; deadline/owner edit rat
 2. Label with two reviewers where judgement is needed (commitments, priority pairs, summaries' key points); resolve disagreements; record agreement.
 3. Assign splits at chain/thread level; write `MANIFEST.json`; tag `golden-v1.0`.
 4. Run the current configuration to create the first baseline.
-5. Phase alignment: email slice (~150 emails, CC-01–CC-10) and `DIR-120` by slice 0.5; full email set, forwarded-mail and identity fixtures by end of Phase 1; chat questions, `UNANS-40` and `ROUTE-60` by Phase 2; meetings by Phase 4 (`IMPLEMENTATION_PLAN.md`).
+5. Phase alignment: email slice (~150 emails, CC-01–CC-10) by slice 0.5 (`IMPLEMENTATION_PLAN.md`, the authority for execution order); `DIR-120` with AI-01 and the statement mapping it tests, by slice 1.4; full email set, forwarded-mail and identity fixtures by end of Phase 1; chat questions, `UNANS-40` and `ROUTE-60` by Phase 2; meetings by Phase 4 (`IMPLEMENTATION_PLAN.md`).
 6. Experiment results (X1–X10, `AI_PIPELINE.md` §13) are stored with the run reports and referenced in the change that adopts or rejects a route.

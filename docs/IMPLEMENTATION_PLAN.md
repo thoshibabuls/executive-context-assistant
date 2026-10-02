@@ -240,14 +240,31 @@ Slice 0.3 is **complete** when, in addition, GitHub Actions is green on the slic
 - Provider layer inside the `intelligence` module (`eca/intelligence/provider/`, prompts in `eca/intelligence/prompts/`, structured-output schemas in `eca/intelligence/output_schemas/`; there is no `eca.ai` package, `BACKEND_DESIGN.md` §5.4): wrapper over `google-genai` (structured output, embeddings, Files API); role registry `config/models.yaml` (model, thinking, temperature, fallback per role); pricing `config/pricing.yaml` with effective dates (`AI_COST_MODEL.md` §2); `ai_calls` meter and 15-minute cost roll-ups (`AI_COST_MODEL.md` §8); attempt cap logic (`AI_PIPELINE.md` §7); cassette recorder/replayer keyed by `(role, prompt_version, input_hash)`; provenance envelope type (`AI_PIPELINE.md` §5.1).
 - Import-linter `forbidden` contract: only `eca.intelligence` imports `google.genai`.
 - Smoke test: verifies every configured model ID exists (resolves Q8: exact `gemini-embedding-2` ID) and replaces `test_gemini_key.py`'s deprecated default.
-- **Depends on:** 0.2 (unit of work, settings) and 0.3 (worker role, migration chain). `users` does not exist yet: `ai_calls` carries a `user_id` (`BACKEND_DESIGN.md` §6.2), and §17.1 puts an FK on every `user_id → users`. How `ai_calls.user_id` exists before 1.1 must be written into `BACKEND_DESIGN.md` before 0.4 starts. Options: the deferred-FK pattern of §7.3.1, added by the 1.1 migration, or another documented choice. The same applies to its access model under §7.6. 0.4 must not create `users`.
+- **Depends on:** 0.2 (unit of work, settings) and 0.3 (worker role, migration chain, Procrastinate periodic tasks). 0.4 does not create `users`.
+- **Decisions (recorded before coding, `BACKEND_DESIGN.md` §5.5, §7.6, §7.7):**
+  - `ai_calls.user_id` and `ai_cost_rollups.user_id`: deferred FK, added by the 1.1 `users` migration.
+  - Access model: telemetry tables isolated per role (API INSERT-only on `ai_calls`, SELECT of its own roll-ups; worker all, including cross-user roll-ups).
+  - Meter rows in their own short transaction.
+  - Configuration at the repository root `config/`, loaded and validated at start.
+  - Cassette key, format, modes and storage.
+- **Migration `0005_ai_calls`:** `ai_calls`, `ai_cost_rollups` (unique per bucket, user, role and model with `NULLS NOT DISTINCT`), grants, FORCE RLS, four policies; no FK to `users`.
+- **Code (`eca.intelligence`):**
+  - `provider/registry.py`, `provider/pricing.py`, `provider/meter.py`, `provider/cassette.py`, `provider/gemini.py` (`google-genai` async client: structured output, embeddings, Files API), `provider/attempts.py`, `provenance.py`, the `ai_calls` tables and the `cost_rollup` periodic task (registered by `eca.worker` through `PeriodicTaskSpec`).
+  - No production prompts: `prompts/` and `output_schemas/` contain only their layout until slice 1.4.
+- **Smoke test:** pytest marker `live`, deselected by default and in CI, skipped without `GEMINI_API_KEY`. It checks every configured model ID with `models.get`, makes one structured call on the T1 role and one embedding on fixed synthetic text, sends no user data and never prints the key. `test_gemini_key.py` is retired once the smoke test has passed with a key.
 - **Exit:** smoke test green; cassette replay deterministic.
 
 ### Slice 0.5 Evaluation harness
 
 - `evals/ai` and `evals/context` runners, report format with the acceptance scorecard (`AI_EVALUATION.md` §8), simulated clock, paired-bootstrap statistics.
 - `world_v1` first slice: fixtures (people, orgs, projects), ~150 labelled emails, chains CC-01–CC-10 in YAML with checkpoints and queries; split assignment (dev/test/sealed/challenge); `MANIFEST.json` with hashes; CI hash and contamination checks (gate A0).
-- **Exit:** runner executes end-to-end against stub pipelines and produces a scorecard; dataset slice frozen as `golden-v0.1` (expanded to `golden-v1.0` by end of Phase 1).
+- **Decisions:**
+  - Code in `backend/eca_evals/` (public `eca` APIs only, import-linter contract); data in `evals/` at the repository root (`AI_EVALUATION.md` §3.1).
+  - Data is synthetic only, with reserved domain names (RFC 2606: `.example`, `example.com`, `example.org`, `.test`).
+  - Labels are **draft** until the labelling owner (Q12) reviews them. The freeze tool refuses to release a draft version, so `golden-v0.1` is prepared as a candidate manifest and frozen only after that review.
+  - `DIR-120` moves to slice 1.4 (`AI_EVALUATION.md` §13).
+  - Gate A0 runs in CI as tests: manifest hashes, contamination and split rules.
+- **Exit:** runner executes end-to-end against stub pipelines and produces a scorecard; dataset slice frozen as `golden-v0.1` (expanded to `golden-v1.0` by end of Phase 1). The freeze requires the owner's label review.
 
 ---
 
@@ -257,7 +274,7 @@ Slice 0.3 is **complete** when, in addition, GitHub Actions is green on the slic
 
 **Depends on:** 0.3 (outbox, worker role). Tests use mocked Google; the external Google Cloud project is needed only for a real sign-in.
 
-Google OIDC (PKCE, `state`, `nonce`), server-side sessions, CSRF, `users` + self Person, `audit_log`, `DELETE /api/v1/me` request recorded (job built in 1.9). The migration that creates `users` also adds `fk_outbox_user` (`outbox.user_id → users(id)`, `BACKEND_DESIGN.md` §7.3.1) and defines the worker role's explicit read policy for enumerating users (`BACKEND_DESIGN.md` §7.6). Tests: auth flows with mocked Google, CSRF rejection, session expiry; FK present and enforced (outbox insert with an unknown `user_id` fails); RT-15 extended to the new tables.
+Google OIDC (PKCE, `state`, `nonce`), server-side sessions, CSRF, `users` + self Person, `audit_log`, `DELETE /api/v1/me` request recorded (job built in 1.9). The migration that creates `users` also adds `fk_outbox_user` (`outbox.user_id → users(id)`, `BACKEND_DESIGN.md` §7.3.1), `fk_ai_calls_user` and `fk_ai_cost_rollups_user` (`BACKEND_DESIGN.md` §7.6) and defines the worker role's explicit read policy for enumerating users (`BACKEND_DESIGN.md` §7.6). Tests: auth flows with mocked Google, CSRF rejection, session expiry; FK present and enforced (outbox insert with an unknown `user_id` fails); RT-15 extended to the new tables.
 
 ### Slice 1.2 Connections
 
@@ -308,7 +325,7 @@ Priority features and scoring (`TECHNICAL_DESIGN.md` §12.6) as event handlers; 
 
 ### Slice 1.9 Deletion and retention
 
-Provider deletion flow (§9.3), source purge on disconnect, account deletion job (`BACKEND_DESIGN.md` §13.3, including the user's `event_consumptions` and `outbox` rows before the user row), retention purge job (including the 7-day purge of dispatched outbox rows and their consumptions), "Your data" summary endpoint. **Tests:** RT-10, RT-11.
+Provider deletion flow (§9.3), source purge on disconnect, account deletion job (`BACKEND_DESIGN.md` §13.3, including the user's `event_consumptions` and `outbox` rows before the user row; `ai_calls.user_id` set to NULL and the user's `ai_cost_rollups` rows folded into the NULL-user rows), retention purge job (including the 7-day purge of dispatched outbox rows and their consumptions), "Your data" summary endpoint. **Tests:** RT-10, RT-11.
 
 **Phase 1 exit:** PRD §57 items 1–3, 5–9, 20 (v1) and 21 demonstrable with a real Gmail test account; RT-01 (pipeline level), RT-02–RT-07 and RT-10–RT-15 green; `golden-v1.0` (full email set) frozen and baselined; E1–E4, E13, E14 targets met on its `test` split; X1, X2 and X9 decided and recorded; measured AI-01 tokens within 30% of `AI_COST_MODEL.md` §3; CC-01–CC-10 pass at L2.
 

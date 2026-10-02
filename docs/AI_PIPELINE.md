@@ -32,7 +32,7 @@
 | Embedding | `gemini-embedding-2`, 768 dimensions | — | — | Chunks, item dedupe vectors, queries, project-hint matching |
 | Judge (offline) | `gemini-3.1-pro-preview` | `gemini-3.8-flash` (high) | high | Evaluation only |
 
-`config/models.yaml` maps **roles** to model, thinking level, temperature, max output tokens, fallback and an `enabled` flag. Code references roles only. Registry changes are major changes (§12). Model IDs come from Google's pages on 2026-10-02; the exact `gemini-embedding-2` ID is verified in slice 0.4 (it appears with and without `-preview`).
+`config/models.yaml` (repository root; loading and validation: `BACKEND_DESIGN.md` §5.5) maps **roles** to inventory ID, model, thinking level, temperature, max output tokens, fallback and an `enabled` flag. Code references roles only. Registry changes are major changes (§12). Model IDs come from Google's pages on 2026-10-02; the exact `gemini-embedding-2` ID is verified by the slice 0.4 live smoke test (it appears with and without `-preview`). Until that test has run with a key, every model ID in the registry is marked `verified: false`.
 
 **Generation settings:** temperature 0 for extraction, classification, planning, adjudication and answers; 0.3 for reply drafts. Structured output (JSON Schema from Pydantic) for every role.
 

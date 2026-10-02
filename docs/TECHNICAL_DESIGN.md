@@ -182,7 +182,8 @@ backend/eca/platform/  (base layer)   backend/eca/api/, backend/eca/worker/  (co
 backend/eca/connectors/{base,dto,registry}.py, connectors/google/{oauth,gmail,calendar,mapping}.py
 backend/eca/intelligence/provider/{gemini,registry,meter,cassette}.py, intelligence/prompts/<role>/v<N>.md, intelligence/output_schemas/<role>.py
 backend/migrations/ (Alembic)   backend/tests/{unit,integration,contract,api,reliability}/
-web/ (Next.js)   evals/{ai,context}/   config/{models,pricing,priority}.yaml   docs/
+backend/eca_evals/  (evaluation code: runners, scorecard, statistics, gate A0; outside eca, imports eca public APIs only)
+web/ (Next.js)   evals/{ai,context}/ (evaluation data, cassettes, reports)   config/{models,pricing,priority}.yaml   docs/
 ```
 
 ---
@@ -244,7 +245,8 @@ sequenceDiagram
   Note over DB: normalize job: TXN messages, conversation state, persons, prefilter + outbox(MessageNormalized)
   X->>DB: claim extraction row (running) — skip AI if succeeded already
   X->>L: AI-01 (outside any transaction)
-  X->>DB: TXN: extraction succeeded + ai_calls + outbox(ExtractionCompleted)
+  X->>DB: ai_calls row (own short transaction, BACKEND_DESIGN.md §5.5)
+  X->>DB: TXN: extraction succeeded + outbox(ExtractionCompleted)
   A->>DB: TXN under per-user merge lock: grounding, merge, evidence, context_events, projections, outbox(WorkItemChanged…)
   Note over DB: handlers: priority, reminders, person/project reactions, prep invalidation, index (AI-04)
 ```

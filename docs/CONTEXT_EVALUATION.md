@@ -80,15 +80,14 @@ evals/context/
     ...
   sessions/
     SS-01_pronoun_followups.yaml
-  fixtures/
-    persons.yaml  orgs.yaml  projects.yaml        # shared world (from world_v1)
   judges/
     latest_state.md  chain_reasoning.md  change_summary.md
-  runner/
-    replay.py  assertions.py  metrics.py  report.py
-  reports/
+  reports/                                       # git-ignored
     <date>_<git-sha>.json  <date>_<git-sha>.md
+backend/eca_evals/context/                       # runner code: replay, assertions, metrics, report (slice 0.5)
 ```
+
+Persons, orgs and projects are not copied into `evals/context/`: chains reference the shared world in `evals/ai/datasets/world_v1/scenario.yaml` (`world: world_v1`). In slice 0.5, chain sources carry their email body or transcript text inline in the chain YAML; separate transcript files (`.vtt`) arrive with the meeting pipeline (Phase 3).
 
 ---
 

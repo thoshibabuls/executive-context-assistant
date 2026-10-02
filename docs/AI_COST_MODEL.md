@@ -30,7 +30,7 @@
 | Batch API | any | 50% of standard | 50% | Up to 24 h latency |
 | Implicit cache hits | Gemini 3.x | ~10% of input price | — | Prefix ≥ 4,096 tokens (not assumed) |
 
-Prices live in `config/pricing.yaml` with effective dates.
+Prices live in `config/pricing.yaml` with effective dates (`effective_from` inclusive, `effective_to` exclusive, UTC dates). The cost of a call uses the entry effective on the call's date, so the promotional T2 price applies until 2026-12-31 and the listed price after it; the estimates in this document keep using post-promotion prices (§1).
 
 ---
 
@@ -144,7 +144,7 @@ Batch import is deferred because the saving does not justify a submission ledger
 
 ## 8. Telemetry
 
-Every call writes `ai_calls` (role, model, prompt version, input / cached / output / thinking tokens, audio seconds, latency, estimated cost, status, attempt, user). Roll-ups every 15 minutes:
+Every call writes `ai_calls` (role, model, prompt version, input / cached / output / thinking tokens, audio seconds, latency, estimated cost, status, attempt, user) in its own short transaction, so failed and rolled-back attempts are counted. Roll-ups every 15 minutes into `ai_cost_rollups` (per 15-minute bucket, user, role and model; `BACKEND_DESIGN.md` §5.5, §7.6); the metrics below are computed from the roll-ups:
 
 | Metric | Definition |
 |---|---|

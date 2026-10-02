@@ -158,7 +158,22 @@ backend/eca/intelligence/output_schemas/<role>.py                               
 | Existing contracts keep their meaning | The invariant "`intelligence` cannot import a source-owning module's repository" (§5.3, §6.3) covers all AI code only if all AI code is in `intelligence` |
 | No new boundary type | A top-level `eca.ai` would be either a 15th domain module (splitting AI ownership with no boundary benefit) or a shared layer like `platform` (importable everywhere, so callers could bypass budgets, and a shared layer would write a domain table) |
 
-Consequences: modules that need a model call (`meetings`, `chat`, `retrieval`, and the extraction jobs) use `eca.intelligence`'s public API only. Slice 0.4 adds an import-linter `forbidden` contract so that only `eca.intelligence` imports `google.genai`. Prompts, output schemas and cassettes are versioned with the module.
+Consequences: modules that need a model call (`meetings`, `chat`, `retrieval`, and the extraction jobs) use `eca.intelligence`'s public API only. Slice 0.4 adds an import-linter contract so that only `eca.intelligence` imports `google.genai` (a custom `eca_restricted_imports` contract in `eca_devtools`: grimp collapses external packages to their top-level name, `google`, so the contract inspects the import statements; other `google.*` packages stay available to connectors). Prompts, output schemas and cassettes are versioned with the module.
+
+### 5.5 AI runtime configuration, metering and cassettes (slice 0.4 decisions)
+
+| Topic | Decision |
+|---|---|
+| Configuration files | `config/models.yaml` (role registry) and `config/pricing.yaml` (prices with effective dates) at the repository root (`TECHNICAL_DESIGN.md` §5.4). `eca.intelligence` loads them once at process start from `API_AI_CONFIG_DIR` (default `<repository root>/config`) and validates them with Pydantic. An invalid file is a startup error. The deployment image must copy `config/`. Changing either file is a major change (`AI_PIPELINE.md` §12) |
+| Role registry | Per role: `inventory_id` (`AI_PIPELINE.md` §3), `model`, `fallback`, `thinking`, `temperature`, `max_output_tokens`, `enabled`, and `output_dimensionality` for embeddings. Code names roles, never model IDs. An unknown role and a disabled role raise distinct errors before any call |
+| Cost | Computed at call time with `Decimal` from the price entry effective on the call's UTC date (`AI_COST_MODEL.md` §2), and stored as `ai_calls.est_cost_usd`. Thinking tokens are billed as output |
+| Meter | Every provider call (live or record mode) writes one `ai_calls` row with IDs and numbers only, never prompt or output text. The row is written in its **own short transaction** (same role, same `app.user_id` as the caller) immediately after the response or error, not in the caller's transaction. Reason: a call whose caller later rolls back (failed job attempt, crash, repair loop) still cost money, and retry overhead must be measurable (`AI_COST_MODEL.md` §8). The insert is one Core INSERT without RETURNING (§7.3.3), so the INSERT-only API role can write it |
+| Roll-ups | Periodic task `cost_rollup` (every 15 min, `schedule` queue, lock `cost_rollup`, §15) recomputes the 15-minute buckets of the last hour from `ai_calls` into `ai_cost_rollups` in one transaction: delete the buckets of the window, insert them again grouped by bucket, user, role and model. Rerunning gives the same rows (idempotent), and late commits within the hour are picked up |
+| Periodic tasks of domain modules | `eca.platform` defines `PeriodicTaskSpec` (task name, `periodic_id` used as the lock and queueing lock, cron, queue, and an async function of the worker unit-of-work factory and the scheduled tick). `eca.intelligence` exposes its specs through its public API; `eca.worker` registers them on Procrastinate. `platform` still imports no domain module |
+| Cassettes | Key `(role, prompt_version, input_hash)`. `input_hash` is the SHA-256 of the canonical JSON of the whole request: model ID, generation settings, system instruction, contents and output schema. A prompt, model or setting change is therefore a cache miss. One JSON file per entry: `<root>/<role>/<prompt_version>/<input_hash>.json` holding the key, model, response text and usage numbers |
+| Cassette modes | `live` (production default; no cassettes), `replay` (cassettes only; a miss raises `CassetteMiss` and never reaches the network; default for tests and CI), `record` (live call, then write; evaluation tooling only, refused when `API_ENV` is production). Replayed calls make no provider call and write no `ai_calls` row |
+| Cassette storage | Committed: `backend/tests/fixtures/cassettes/` (hand-written, for unit tests) and `evals/ai/cassettes/<suite>/` (reviewed recordings of synthetic evaluation data only). New recordings go to `evals/**/cassettes/live/` (git-ignored) and are copied into a committed directory only after review. A cassette is never recorded from user data |
+| Attempt caps | A pure policy in `eca.intelligence` (`AI_PIPELINE.md` §7): background keys get 4 model calls including one repair, fallback model from attempt 3, budget deferrals not counted; interactive calls get one retry, then one fallback call, then degradation. The persistent per-key attempt counter lives with `extractions` (slice 1.4); slice 0.4 provides the policy and an in-process runner for interactive calls |
 
 ---
 
@@ -215,6 +230,7 @@ Columns `origin ∈ {source, computed, ai, user}` and `verification_status ∈ {
 | `feedback_events` | USER-AUTHORED | work/attention/people (writer of the corrected entity) | evaluation, learning | Append-only | — | Permanent with account | — |
 | `chat_sessions`, `chat_messages` | USER-AUTHORED (questions) + AI-DERIVED (answers with citation snapshots) | chat | chat, evaluation | Append-only | — | User can delete sessions (permanent); account | — |
 | `ai_calls` | COMPUTED (telemetry, no content) | intelligence | ops, cost | Insert | — | Permanent after 90 days; user_id nulled on account deletion | — |
+| `ai_cost_rollups` | COMPUTED (aggregates of `ai_calls`, no content) | intelligence (`cost_rollup` task) | ops, cost; API reads its own user's rows (budgets, slice 3.5) | Recomputed per 15-minute bucket | From `ai_calls` within its retention | Kept as aggregates; on account deletion the user's rows are re-keyed to `user_id` NULL (§7.6) | Recompute replaces the bucket |
 | `audit_log` | COMPUTED | privacy (via `platform.audit`) | ops | Append-only | — | Retained 1 year without content | — |
 | `outbox`, `event_consumptions`, `idempotency_keys` | COMPUTED (delivery mechanics) | platform | platform; `outbox` and `event_consumptions` are read only by the worker role (§7.6) | State transitions | — | Permanent after 7 days (outbox, consumptions) / 24 h (idempotency); a user's outbox rows are deleted by account deletion (§13.3) | Keys enforce uniqueness |
 
@@ -295,7 +311,7 @@ Both tables are created in slice 0.3 by migration `0003` (§7.7). Their access m
 | Integrity after the FK | Every non-NULL `outbox.user_id` references an existing user. Account deletion deletes the user's outbox rows (and their consumptions) before the user row (§13.3) |
 | Why this is not an artificial dependency | The constraint is added by identity's migration, the higher layer, which already depends on `platform`. `platform` schema and code never reference `users`. Dependency direction stays identity → platform |
 
-`event_consumptions.event_id → outbox(id)` is created with the table in 0.3 because both tables exist then.
+`event_consumptions.event_id → outbox(id)` is created with the table in 0.3 because both tables exist then. The same deferred pattern applies to `ai_calls.user_id` and `ai_cost_rollups.user_id` (slice 0.4; `fk_ai_calls_user` and `fk_ai_cost_rollups_user` in the 1.1 migration, §7.6).
 
 #### 7.3.2 States and dispatch
 
@@ -406,6 +422,8 @@ Migration `0001` keeps its historical behaviour of skipping grants when the API 
 | Procrastinate tables (`procrastinate_jobs`, `procrastinate_periodic_defers`, `procrastinate_events`, `procrastinate_workers`) | Migration role | **None** | SELECT, INSERT, UPDATE, DELETE | No (no `user_id`; Procrastinate internals) | — | Grants only |
 | Procrastinate sequences (serial and identity sequences of those tables) | Migration role | **None** | USAGE, SELECT | — | — | — |
 | Procrastinate functions (`procrastinate_*`) | Migration role | **None** | EXECUTE | — | — | EXECUTE revoked from PUBLIC |
+| `ai_calls` (slice 0.4) | Migration role | **INSERT only** | SELECT, INSERT, UPDATE, DELETE | Yes | Yes | `ai_calls_api_insert` `FOR INSERT TO eca_app WITH CHECK (user_id = eca_current_user_id())`; `ai_calls_worker_all` `FOR ALL TO eca_worker USING (true) WITH CHECK (true)` |
+| `ai_cost_rollups` (slice 0.4) | Migration role | **SELECT only** | SELECT, INSERT, UPDATE, DELETE | Yes | Yes | `ai_cost_rollups_api_read` `FOR SELECT TO eca_app USING (user_id = eca_current_user_id())`; `ai_cost_rollups_worker_all` `FOR ALL TO eca_worker USING (true) WITH CHECK (true)` |
 | `alembic_version` | Migration role | SELECT only (readiness) | SELECT only | No | — | — |
 | `eca_current_user_id()` | Migration role | EXECUTE | EXECUTE | — | — | `REVOKE ALL … FROM PUBLIC` |
 | Schema `public` | Migration role | USAGE (no CREATE) | USAGE (no CREATE) | — | — | — |
@@ -431,6 +449,13 @@ No runtime role holds TRUNCATE, REFERENCES or TRIGGER on any table, or UPDATE on
 
 Behavioural checks (what each role can actually do) are in RT-15 (§21).
 
+**AI telemetry tables (slice 0.4).** `ai_calls` and `ai_cost_rollups` hold IDs and numbers, never content (§6.2), so they are classified with the delivery infrastructure: isolated per role by grants and role-targeted policies, not business tables under `_user_isolation`.
+- **Writers.** The meter runs in the process that made the call: the API role for interactive calls (it may insert only rows of its own `app.user_id`, without RETURNING, §7.3.3), the worker role for background calls (in the job's user context, or with `user_id` NULL for system calls).
+- **Cross-user reads.** The 15-minute roll-up runs as the worker role with `app.user_id` unset and reads all rows through `ai_calls_worker_all`, as the dispatcher reads `outbox`. The rule "no cross-user policy on business tables" is unchanged, because these are not business tables.
+- **API reads.** The API reads only its own user's roll-ups (per-user budget checks in slice 3.5) and never raw `ai_calls`.
+- **Deferred FKs.** `ai_calls.user_id` and `ai_cost_rollups.user_id` get their FK to `users` in the slice 1.1 migration that creates `users`, like `outbox` (§7.3.1): `fk_ai_calls_user`, `fk_ai_cost_rollups_user`, `ON DELETE NO ACTION`. Until then `user_id` comes only from the unit of work.
+- **Account deletion (slice 1.9).** `ai_calls.user_id` is set to NULL (rows stay content-free until the 90-day purge). The user's roll-up rows are added into the matching `user_id` NULL rows and then deleted, so global cost history is kept without the user.
+
 **How `SET LOCAL app.user_id` behaves.** The unit of work runs `set_config('app.user_id', <uuid>, true)` (transaction-local) as its first statement. The value comes only from the authenticated session (API) or from the event or job being processed (worker), never from request input. It disappears at commit or rollback, so a pooled connection never carries it to the next transaction (RT-15).
 
 **API requests.** Each request is one `eca_app` transaction with `app.user_id` = the session's user. Business tables return only that user's rows. On `outbox` the API can only insert, and only rows for its own `app.user_id` (a NULL or foreign `user_id` fails the `WITH CHECK`). It cannot read, update or delete any outbox row, and it has no privilege on `event_consumptions` or Procrastinate objects. No value of `app.user_id` changes this, because these limits are grants and role-targeted policies, not user predicates. The API never enqueues jobs directly: all background work starts from an outbox row.
@@ -449,7 +474,7 @@ Behavioural checks (what each role can actually do) are in RT-15 (§21).
 
 **Residual risk.** RLS keyed on a session setting protects against missing `WHERE user_id` filters and pooled-connection leaks. It cannot stop code that runs arbitrary SQL as `eca_app`, because such code could call `set_config` itself. Mitigations: parameterized SQLAlchemy only, no SQL built from input, the planner cannot write SQL (`TECHNICAL_DESIGN.md` §17.3), and explicit `user_id` predicates in every repository query. Infrastructure isolation does not depend on this, because it uses role grants.
 
-### 7.7 Slice 0.3 migrations
+### 7.7 Slice 0.3 and 0.4 migrations
 
 One concern per revision (§17.4). Each revision creates its objects **together with** their grants, revocations and RLS, in one transaction (`transaction_per_migration`). So no committed intermediate state ever exposes an infrastructure table to the API role. The chain is linear:
 
@@ -457,6 +482,7 @@ One concern per revision (§17.4). Each revision creates its objects **together 
 |---|---|---|---|
 | `0002_runtime_role_access` | `0001` | The role checks of §7.6 (both runtime roles exist, are safe, distinct and not members of each other). For the worker role: USAGE on schema `public`, EXECUTE on `eca_current_user_id()`, SELECT on `alembic_version`, and default privileges (SELECT, INSERT, UPDATE, DELETE on tables; USAGE, SELECT on sequences). Removes the API role's INSERT, UPDATE and DELETE on `alembic_version` (§7.6) | Create tables, roles or passwords |
 | `0003_outbox` | `0002` (the worker defaults must exist before the tables, and both roles must exist for the policies) | `outbox`, `event_consumptions`, `ix_outbox_pending`, `ix_outbox_user`, FK `event_consumptions.event_id → outbox(id)`; the trims of §7.6; ENABLE and FORCE RLS; the three policies | Add any FK to `users` (§7.3.1) |
+| `0005_ai_calls` (slice 0.4) | `0004` | `ai_calls` and `ai_cost_rollups` (§5.5), their indexes, grant trims, ENABLE and FORCE RLS and the four policies of the AI telemetry rows above | Add an FK to `users` (deferred to slice 1.1) |
 | `0004_procrastinate_schema` | `0003` (only for the linear chain; Procrastinate objects do not reference platform tables) | The Procrastinate schema of the pinned version (§15), executed from a vendored copy `backend/migrations/sql/procrastinate_<version>_schema.sql`; the Procrastinate trims and the EXECUTE grants of §7.6 | Call `procrastinate schema --apply`, or read `schema.sql` from the installed package at migration time (the revision must not change when the package changes) |
 
 Downgrades reverse each revision: `0004` drops the Procrastinate tables, functions and types; `0003` drops both tables; `0002` removes the worker grants and defaults (the `alembic_version` correction is not reverted). The integration test runs `0001` → head → base → head and checks the privilege matrix after each upgrade.
@@ -971,7 +997,7 @@ Procrastinate is pinned exactly (`procrastinate==3.10.0`, slice 0.3; requires Py
 | `outbox_dispatch` | Worker loop, every 1 s | Row-level `SKIP LOCKED` | §7.4 |
 | `retention_purge` | Nightly | `retention` | Batched, idempotent |
 | `delete_account`, `purge_source` | User request | `delete:{user}` / `purge:{conn}` | Resumable |
-| `cost_rollup` | Every 15 min | `cost_rollup` | Upsert |
+| `cost_rollup` | Every 15 min | `cost_rollup` | Recompute the window (delete, insert) |
 
 Per-user fairness: at most 4 concurrent `extract` jobs per user (checked at job start against running jobs for that user; excess re-deferred with a short delay), so one large import cannot starve other users.
 
@@ -1126,7 +1152,7 @@ Per user, enforced in the API process (in-memory token buckets; with ≤ 2 API i
 - UUIDv7 primary keys (application-generated); UUIDv5 where IDs must be reproducible (evidence).
 - `TEXT` for strings; enumerations as `TEXT` + `CHECK`.
 - Mutable entity tables: `id, created_at, updated_at, deleted_at` (+ `version` where optimistic concurrency applies); `updated_at` by trigger; partial indexes `WHERE deleted_at IS NULL`. Append-only tables (`context_events`, `evidence`, `extractions` status aside, `ai_calls`, `audit_log`, `outbox`, `event_consumptions`, `feedback_events`) have `created_at` only.
-- **Foreign keys** (`ON DELETE NO ACTION`, no cascades) on: every `user_id → users`; provenance (`extractions.source_item_id`, `evidence.source_item_id`, `evidence.extraction_id`, `item_evidence.evidence_id`, `context_events.evidence_id`, `work_items.reported_status_evidence_id`); parent–child (`messages → source_items/conversations`, `message_participants → messages/persons`, `transcript_segments → recordings`, `meeting_participants → meetings/persons`, `chunks → source_items`); entity references on items (`owner/counterparty/requester → persons`, `project_id → projects`, `merged_into_id → same table`). Polymorphic references (`context_events.entity_id`, `item_evidence.item_id`, `entity_links`) are validated in the `work` service.
+- **Foreign keys** (`ON DELETE NO ACTION`, no cascades) on: every `user_id → users` (for `outbox`, `ai_calls` and `ai_cost_rollups`, which exist before `users`, the FK is added by the slice 1.1 migration that creates `users`: §7.3.1, §7.6); provenance (`extractions.source_item_id`, `evidence.source_item_id`, `evidence.extraction_id`, `item_evidence.evidence_id`, `context_events.evidence_id`, `work_items.reported_status_evidence_id`); parent–child (`messages → source_items/conversations`, `message_participants → messages/persons`, `transcript_segments → recordings`, `meeting_participants → meetings/persons`, `chunks → source_items`); entity references on items (`owner/counterparty/requester → persons`, `project_id → projects`, `merged_into_id → same table`). Polymorphic references (`context_events.entity_id`, `item_evidence.item_id`, `entity_links`) are validated in the `work` service.
 - Row-level security (ENABLE + FORCE) on every user-owned business table: `USING`/`WITH CHECK (user_id = eca_current_user_id())`, where `eca_current_user_id()` reads `current_setting('app.user_id', true)`; the UoW runs `SET LOCAL app.user_id` (as `set_config(…, true)`) per transaction; an unset variable yields no rows (fail closed). Cross-user maintenance jobs iterate users and set the variable per user transaction. Infrastructure tables (`outbox`, `event_consumptions`, Procrastinate objects) are isolated per role by grants and role-targeted policies, not by `app.user_id` (§7.6). Only the migration role bypasses RLS.
 - **Provenance columns** (`AI_PIPELINE.md` §5.1) on every AI-derived row or column group: `extraction_id` (FK to `extractions`, null for non-LLM methods), `extraction_method` (`llm`, `llm_adjudicated`, `rule`, `deterministic`, `embedding_match`, `transcription`), `model` (null for non-LLM), `derived_at`, `confidence`, `confidence_band`; evidence via `evidence`/`item_evidence` (items, decisions) or `covered_source_ids uuid[]` (summaries). Column groups use a prefix where a table mixes classes: `messages.triage_*`, `conversations.summary_*`, `meetings.summary_*`, `persons.role_*`, `meeting_participants.mapping_*`. Per-change provenance lives in `context_events.extraction_id` and `payload`. Inserts without complete provenance are rejected by the `work`/owning service (tested by `AI_EVALUATION.md` E14).
 
