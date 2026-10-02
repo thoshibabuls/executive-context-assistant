@@ -367,7 +367,7 @@ chunks(id, user_id, source_item_id, chunk_index, kind, text, token_count, occurr
 reminders(id, user_id, item_type, item_id, reminder_type, fire_at, state [pending|delivered|snoozed|dismissed|acted|suppressed|cancelled],
           fingerprint bytea, reason jsonb, delivered_at, snoozed_until, version, timestamps)
 notifications(id, user_id, reminder_id, channel [in_app|web_push], state [pending|sending|sent|failed], sent_at, created_at)
-briefings(user_id, date, content jsonb, generated_at, ai_call_id)
+briefings(user_id, date, timezone, headline, content jsonb, generated_at, trigger)   -- no ai_call_id: AI-12 retired (BACKEND_DESIGN.md §17.6)
 feedback_events(id, user_id, target_type, target_id, action, before jsonb, after jsonb, created_at)
 chat_sessions(id, user_id, title, scope jsonb, session_summary, session_entities jsonb, created_at, last_active_at)
 chat_messages(id, session_id, user_id, role, content, claims jsonb, citations jsonb (with text snapshots), retrieval_trace_id, ai_call_ids, created_at)
@@ -474,6 +474,15 @@ fᵢ ∈ [0, 1]:
 
 User corrections and their effects are defined in `BACKEND_DESIGN.md` §9.9. Learning is bounded and deterministic: per-user feature multipliers clamped to [0.5, 2], sender/pattern suppression after three rejections, reminder timing preferences from snoozes, and up to three of the user's own rejections as negative examples in AI-01. No fine-tuning in the MVP.
 
+### 12.8 Priority fitting (decided 2026-10-03)
+
+The score stays the §12.6 formula with template reasons; fitting only changes weights. No model assigns or adjusts a priority.
+
+- **Pairs from user feedback.** When the user sets `priority_override` on a work item or conversation (`PATCH`), the same transaction records up to 3 pairs in `priority_pairs` (`BACKEND_DESIGN.md` §17.6): override `1` → the item is preferred over the 3 open items or conversations whose computed score is nearest above its own; override `-1` → the 3 nearest below are preferred over it. Each pair stores both feature vectors (the §12.6 feature values at that moment, no content) and the weights' `version`. Clearing an override (`0` or null) records no pair.
+- **Per-user multipliers.** The nightly `priority_fit` job fits one multiplier `mᵢ` per feature for each user with at least 10 pairs from the last 180 days (at most 500, newest first): pairwise logistic loss on `Σ wᵢ·mᵢ·(fᵢ(preferred) − fᵢ(other))`, full-batch gradient descent with fixed order, 200 iterations, learning rate 0.5, L2 pull towards 1 (λ = 0.1), each `mᵢ` clamped to **[0.5, 2]** after every step (§12.7). The result, the pair count and the pairwise agreement are stored in `user_priority_weights`. With fewer than 10 pairs all multipliers are 1.
+- **Effective weights** = `wᵢ·mᵢ` renormalized to sum 1; the confidence factor, caps and override rules of §12.6 are unchanged. A user override (authority 5) always wins over the computed score.
+- **Global weights** (`config/priority.yaml`) are fitted offline on the labelled `priority_pairs.jsonl` of the frozen dataset (`AI_EVALUATION.md` §4.5) with the same routine, multipliers bounded to [0, 5] and the result renormalized: `eca ops priority-fit --pairs <file> --split dev` prints a proposed weights block and its pairwise agreement on the chosen split. Applying it is a major change (`AI_PIPELINE.md` §12) gated by E5.
+
 ---
 
 ## 13. AI / model architecture
@@ -529,6 +538,30 @@ Reminders are deterministic; no model decides whether to remind.
 ### 15.3 Delivery
 
 In-app notification center and Today, plus optional Web Push for the capped proactive set. Notification idempotency: `BACKEND_DESIGN.md` §10.1. Email or mobile push is deferred (Q4).
+
+### 15.4 Rule parameters (decided 2026-10-03)
+
+Times are local in `users.timezone`. **Work hours** come from `users.work_hours` (`days`, `start_hour`, `end_hour`; default Monday–Friday 09:00–18:00, as for coverage). A **working day** is a work-hours day (no holiday calendar). **Morning** of a date = its work start hour. The **next work-hours slot** = now if inside work hours, else the next work start. **Quiet hours** = `work_hours.quiet_start_hour` to `quiet_end_hour` (default 21:00–07:00, every day).
+
+| Type | Candidates | Slots and fire time |
+|---|---|---|
+| `deadline` | Open item (`open`/`in_progress`), not rejected, archived, merged or deleted, `due_at` set (fuzzy deadlines have none), priority ≥ threshold (40, raised by dismissals below) | `day_before`: morning of the day before the due date; `due_day`: morning of the due date, only for **hard deadlines** (`due_kind` ∈ {`by`, `on`} with precision `day` or `datetime`). A slot whose time has passed while the due time has not fires on the next sweep; a passed due time leaves it to `overdue` |
+| `overdue` | `my_task` or `my_commitment`, open, `due_at` < now | `cycle:0` at the morning after the due date; then `cycle:n` every 2 working days. After a dismissal no further cycle is created until the material key changes |
+| `commitment` | `my_commitment`, open, due today or tomorrow | `once`: morning of the due date |
+| `waiting_for` | `waiting_for` or `delegated`, open, and either past due with `last_activity_at` ≤ `due_at`, or no activity for 5 working days | `once`: next work-hours slot |
+| `follow_up` | Conversation awaiting the other side whose last message is the user's, containing a question or request (`communication.waiting_on_others`), quiet for 3 working days | `once`: next work-hours slot. The per-person override of §15.1 is not built |
+| `meeting_prep` | Scheduled meeting starting within 24 h with ≥ 1 open item involving an attendee other than the user | `once`: start − 30 min. Unresolved questions join with meeting extraction (Phase 4) |
+
+- **Keys.** `material_key` = SHA-256 of (item type, item ID, reminder type, `due_at`, `lifecycle_status`, `last_activity_at`) for items; (conversation, `follow_up`, `last_outbound_at`, `last_inbound_at`) for threads; (meeting, `meeting_prep`, `starts_at`) for meetings. `fingerprint` = SHA-256(material key, slot); `UNIQUE (user_id, fingerprint)` makes evaluation idempotent and a delivered or dismissed reminder is never created again (§15.2).
+- **Priority** of a reminder = its item's priority score (conversations: the conversation's score; meetings: the highest score of the open items found).
+- **Evaluation** (`evaluate_reminders` and the hourly full pass of `reminder_sweep`) inserts new candidates as `pending` and cancels `pending` reminders of the same item and type whose material key is no longer current. Items whose candidate rule no longer holds have their `pending` reminders cancelled.
+- **Delivery** (every 5 minutes, per user, never during quiet hours): due `pending` and `snoozed` reminders in priority order. A reminder is `cancelled` when its item is gone, closed, rejected or archived (or the meeting is cancelled) and `suppressed` (`acted_upon`) when the user acted since the reminder was created: a user event on the item, or (follow-ups) an outbound message in the thread. Otherwise it becomes `delivered` with `delivery_seq + 1`. It is **proactive** (in-app notification plus Web Push to active subscriptions) while the user's proactive deliveries of the local day are below **5**, the reminder is `proactive_eligible`, and the person is not suppressed; otherwise it is delivered silently (reminders list and Today only).
+- **Not proactive:** suggested items with confidence band `low`; reminder types for a person with 3 dismissals of that type in 90 days ("sender suppression").
+- **Dismissal learning (bounded):** the `deadline` threshold rises by 10 per dismissed reminder of the same person in 90 days, at most 70.
+- **Snooze learning (bounded):** with ≥ 3 snoozes of a reminder type in 30 days, new reminders of that type fire later by the median snooze delay, clamped to [0, 4 h] and never after the due time.
+- **Snooze** = `{preset: 1h | 3h | tomorrow}` or `{until}` (≤ 7 days): state `snoozed`, `fire_at = until`; at that time the sweep delivers it again (`delivery_seq + 1`). Dismiss and acted are terminal. All transitions are conditional updates (`UPDATE … WHERE id = :id AND state IN (…)`).
+- **Rendering.** Text comes from fixed templates over the item's current fields ("You promised to send X today.", PRD §19); `reason` stores the rule and its parameters, never message text.
+- **Web Push.** Pushes carry **no payload**: the service worker fetches the notification center (`GET /api/v1/notifications`) and shows the newest entries, so no content passes through the push service. VAPID (RFC 8292) with an ES256 JWT (`aud` = push service origin, `exp` = 12 h, `sub` = `WEB_PUSH_VAPID_SUBJECT`); headers `TTL: 14400`, `Urgency: normal`, `Topic` = reminder ID without dashes. The keys come only from the environment: `WEB_PUSH_VAPID_PUBLIC_KEY` (base64url uncompressed P-256 point), `WEB_PUSH_VAPID_PRIVATE_KEY` (base64url 32-byte private scalar; a secret, held in the secret manager), `WEB_PUSH_VAPID_SUBJECT` (`mailto:` or `https:` contact). The operator creates a pair with `eca ops vapid-keys`; nothing is committed. Unset keys disable Web Push (in-app only). A push-service 404 or 410 revokes the subscription; 429 and 5xx are retried by the sweep (at most 3 attempts).
 
 ---
 

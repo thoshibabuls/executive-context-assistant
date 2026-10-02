@@ -147,13 +147,37 @@ Phase 2 enforces the two per-user daily caps above for chat and indexing; the re
 - **Spend** = the sum of `est_cost_usd` in the user's `ai_cost_rollups` buckets since 00:00 UTC of the current day. Roll-ups lag by up to 15 minutes, so the check can let a few calls through after a cap is crossed; this is accepted at pilot scale.
 - **Soft cap ($1.00):** AI-07 is replaced by the deterministic structured answer, plus AI-06 where the intent allows, with a notice. AI-05 still runs.
 - **Hard cap ($2.50):** chat answers deterministic intents only (no AI-05, AI-06 or AI-07; non-list questions get the degraded template with a notice); the index job stores chunks without embeddings (FTS-only), which the operator `reembed` path fills later. Extraction is not changed in Phase 2.
-- The cap values are code constants in `eca.intelligence`; changing them is a major change (§9).
+- The cap values are code constants in `eca.intelligence`; changing them is a major change (§9). (Superseded by §7.2: the values now come from `config/budgets.yaml`.)
+
+### 7.2 Phase 3 enforcement (decided 2026-10-03)
+
+- **Configuration.** `config/budgets.yaml` (loaded and validated at process start with `models.yaml` and `pricing.yaml`, `BACKEND_DESIGN.md` §5.5): per-user soft cap $1.00 and hard cap $2.50, the global daily budget per environment (default $25.00), the global alert fraction 0.70, the VIP threshold (`importance_user` ≥ 4), the AI-02 daily call cap (20) and, per role, the level at which it stops. Changing the file is a major change (§9).
+- **Where.** A budget guard inside `AIClient` checks every `generate` and `embed` call before the cassette or provider step, so no caller can bypass it. It raises `BudgetExceeded` (a domain error in `eca.platform.errors`) with `retry_after_s` = seconds until 00:00 UTC (the spend window) and `details = {role, level}`; no `ai_calls` row is written because no call was made, and the block is logged with IDs only. The API maps `BudgetExceeded` to 429 with `Retry-After`; every other caller degrades.
+- **Spend.** As §7.1 (the user's roll-ups since 00:00 UTC), cached per user for 60 s in the process. The global budget is the sum over all users' roll-ups of the day; only the worker reads it (the API role sees only its own user's roll-ups), and it applies to background roles only.
+
+| Role | Stops at | Degraded route (`AI_PIPELINE.md` §14) |
+|---|---|---|
+| AI-01 `email_extract` | hard (VIP senders and the user's outbound mail exempt) | Extraction deferred: the source item stays `extract_pending` with `next_attempt_at` = the window reset; the attempt is not counted (`AI_PIPELINE.md` §7) |
+| AI-02 `adjudicate` | hard; also 20 calls / user / day | Keep the T1 result (item stays `suggested`, band `low`) |
+| AI-03 `thread_summary` | hard | Gist timeline; a user request gets 429 + `Retry-After` |
+| AI-04 `embed` | hard | Indexing FTS-only (operator `reembed` later); queries FTS-only |
+| AI-05 `plan_query` | hard | Rules only; unmatched questions take the fallback route |
+| AI-06 `answer_lookup` | hard | Deterministic answer or the degraded template |
+| AI-07 `answer_synthesis` | soft | AI-06 or the deterministic structured answer with a notice |
+| AI-08 `reply_guidance` | hard | Deterministic context section without a draft, with a notice |
+| AI-09 `transcribe`, AI-10 `meeting_extract` | hard | Deferred until the window resets (Phase 4) |
+| AI-11 `meeting_asks` | soft | Deterministic prep sections only (Phase 4) |
+| AI-14 `judge` | never (offline, no user) | — |
+
+Background roles (AI-01, AI-02, AI-03, AI-04, AI-09, AI-10) also stop for every user when the global budget is spent.
+
+- **Audit and alerts.** After each roll-up, the `cost_rollup` task (worker) writes one `audit_log` row per user, cap and UTC day when a user's spend first reaches the soft or hard cap (`ai_budget_soft_cap_reached`, `ai_budget_hard_cap_reached`; actor `system`; metadata `{date, level}`), and one row with `user_id` NULL when the global spend reaches the alert fraction or the budget (`ai_global_budget_alert`, `ai_global_budget_reached`). The hard-cap and global rows are also logged at error level: the operator alert of §7 until a paging channel exists. Rows are deduplicated by checking for the same action and date first (`TECHNICAL_DESIGN.md` §17.7).
 
 ---
 
 ## 8. Telemetry
 
-Every call writes `ai_calls` (role, model, prompt version, input / cached / output / thinking tokens, audio seconds, latency, estimated cost, status, attempt, user) in its own short transaction, so failed and rolled-back attempts are counted. Roll-ups every 15 minutes into `ai_cost_rollups` (per 15-minute bucket, user, role and model; `BACKEND_DESIGN.md` §5.5, §7.6); the metrics below are computed from the roll-ups:
+Every call writes `ai_calls` (role, model, prompt version, input / cached / output / thinking tokens, audio seconds, latency, estimated cost, status, attempt, user) in its own short transaction, so failed and rolled-back attempts are counted. Every Phase 3 call (AI-03, AI-08) passes the user's ID, so cost per user and per role is a group-by over `ai_cost_rollups` (`eca ops cost --date YYYY-MM-DD` prints it per role with user IDs hashed). Roll-ups every 15 minutes into `ai_cost_rollups` (per 15-minute bucket, user, role and model; `BACKEND_DESIGN.md` §5.5, §7.6); the metrics below are computed from the roll-ups:
 
 | Metric | Definition |
 |---|---|

@@ -107,13 +107,13 @@ Media processing (ffmpeg) runs on the `media` queue with concurrency 1 in the sa
 | `connectors` | none (adapters) | `MailConnector`, `CalendarConnector`, `AuthConnector`, later `ChatConnector` | — |
 | `communication` | `conversations`, `messages`, `message_participants` | normalize message, thread context, mark handled | `MessageNormalized`, `ConversationStateChanged` |
 | `meetings` | `meetings`, `meeting_participants`, `recordings`, `transcript_segments` | upsert from calendar, uploads, media pipeline, speaker mapping, prep context | `MeetingChanged`, `RecordingUploaded`, `TranscriptStored`, `MeetingProcessed` |
-| `people` | `persons`, `person_identifiers`, `organizations`, `entity_mentions` | resolve, merge, person context, profile updates | `PersonChanged`, `PersonsMerged` |
+| `people` | `persons`, `person_identifiers`, `organizations`, `entity_mentions` | resolve, merge, person context, profile updates | `PersonChanged` (user edits, merges, aliases; Phase 3) |
 | `work` | `work_items`, `work_item_owners`, `decisions`, `evidence`, `item_evidence`, `context_events`, `entity_links` | `apply_extraction`, `append_event`, fold, user actions, merge, queries by direction | `WorkItemChanged`, `DecisionChanged`, `ConflictDetected` |
 | `projects` | `projects`, `project_members` | hint matching, topic mode, project context | `ProjectChanged` |
 | `intelligence` | `extractions`, `ai_calls` | `extract_message`, `extract_meeting`, `adjudicate`, `embed`, `summarize`, AI provider layer (§5.4) | `ExtractionCompleted`, `ExtractionFailed` |
 | `retrieval` | `chunks`, `retrieval_traces` | index, plan, retrieve, assemble packet, day query | — |
 | `chat` | `chat_sessions`, `chat_messages` | sessions, answer stream, reply guidance | — |
-| `attention` | `reminders`, `notifications`, `briefings`; priority columns written via owning modules' services | priority, reminders, prep sections, briefing | `ReminderDue` |
+| `attention` | `reminders`, `notifications`, `push_subscriptions`, `briefings`, `priority_pairs`, `user_priority_weights` (Phase 3, §17.6); priority columns and the computed relationship profile written via owning modules' services | priority (and its per-user fitting), reminders, notifications, Web Push, briefing, relationship profiles, prep sections | `ReminderDue`, `BriefingDue` |
 | `privacy` | `audit_log`, `export_jobs`, `deletion_jobs` | export, delete account, purge source, retention | — |
 
 ### 5.2 Dependency rules
@@ -144,6 +144,18 @@ intelligence → platform only                                  (receives input 
 connectors are imported only by ingestion and connections (via the connector registry)
 every module → platform
 ```
+
+**Phase 3 (decided 2026-10-03).** No new edge between domain modules except `privacy → attention` (deletion and retention call `attention.purge_user` and `attention.purge_expired`). Where each Phase 3 feature lives, so the graph stays acyclic:
+
+| Feature | Module | Reads | Writes |
+|---|---|---|---|
+| Relationship profiles (`CONTEXT_ARCHITECTURE.md` §5.3) | `attention` (deterministic) | `work`, `communication`, `meetings`, `people` read APIs | `persons.importance_inferred`, `persons.interaction_stats` through `people.set_relationship_profile` (people stays the single writer) |
+| Reminders, notifications, Web Push, briefing, priority fitting | `attention` (deterministic) | `work`, `communication`, `meetings`, `people`, `identity` read APIs | its own tables; priority columns through `work`/`communication` services |
+| Person corrections | `people` service + `work.record_entity_event` | — | `persons` (user fields), `feedback_events`, `context_events` (entity `person`, actor user, authority 5), outbox `PersonChanged`; the API composition calls both services in one transaction, because `people` must not import `work` |
+| AI-03 thread summaries | `retrieval` (already imports `communication` and `intelligence`; it orchestrates AI-04 the same way) | `communication` read APIs | `conversations.summary_*` through `communication.store_thread_summary` |
+| AI-08 reply guidance | `chat` (§5.1: "reply guidance"), packets from `retrieval` | `retrieval` only | nothing except `idempotency_keys` (the stored response) |
+
+`attention` and `people` never import `intelligence`: priority, reminders, briefings, profiles and person cards are deterministic (`AI_PIPELINE.md` §3, "avoided by design"). Two import-linter `forbidden` contracts enforce it.
 
 Reactions that would create cycles (e.g., `work` changes → `attention` recomputes) go through outbox events. The graph is acyclic: no module imports one that (directly or indirectly) imports it. Phase 2 adds import-linter `forbidden` contracts that keep it so: `work`, `people`, `communication`, `meetings`, `ingestion`, `identity`, `connections` and `attention` never import `retrieval`, `projects` or `chat`; `retrieval` and `projects` never import `chat`; `projects` never imports `retrieval`.
 
@@ -235,7 +247,7 @@ Columns `origin ∈ {source, computed, ai, user}` and `verification_status ∈ {
 | `messages` (content columns) | SOURCE | communication | all read paths | Body purge by retention | R4 + normalize | Body permanent purge on retention/provider deletion; row permanent on purge/account deletion | Provider authoritative |
 | `messages.triage` | AI-DERIVED (projection of extraction) | communication (from apply event) | attention, retrieval | Replaced when a newer extraction for the message applies | R2 | With message | User "mark handled/low priority" overrides at conversation level |
 | `message_participants` | SOURCE | communication | people, retrieval | Insert only | R4 | With message | — |
-| `conversations` | COMPUTED + AI-DERIVED (`summary`) + USER-AUTHORED (`handled_by_user_at`, `priority_override`) | communication | attention, retrieval, chat | Reply state recomputed on each message; summary by AI-03 | Computed: from messages; summary: R3 | Permanent with source purge/account | User overrides win; reply state recomputed |
+| `conversations` | COMPUTED + AI-DERIVED (`summary_*`, with provenance and `summary_covered_source_ids`) + USER-AUTHORED (`handled_by_user_at`, `priority_override`) | communication | attention, retrieval, chat | Reply state recomputed on each message; summary by AI-03, keyed by the last covered message (§17.6) | Computed: from messages; summary: R3 | Permanent with source purge/account | User overrides win; reply state recomputed |
 | `persons` | COMPUTED (identity, stats) + AI-DERIVED (`role_title` inferred) + USER-AUTHORED (`importance_user`, edited fields) | people | all | Stats recomputed; user fields only by user | Computed: nightly; AI fields: R2 | Permanent with account; logical `merged_into_id` on merge | User fields win; inferred fields replaced only by newer evidence |
 | `person_identifiers` | COMPUTED + USER-AUTHORED (aliases) | people | resolution | Insert; user add/remove | — | Permanent with account | Unique key; merges move identifiers |
 | `organizations` | COMPUTED + USER-AUTHORED | people | all | Domain-derived; user rename | — | Permanent with account | User wins |
@@ -254,8 +266,11 @@ Columns `origin ∈ {source, computed, ai, user}` and `verification_status ∈ {
 | `projects`, `project_members` | USER-AUTHORED or AI-DERIVED (suggested) | projects | all | User actions; suggestions nightly | Suggestions recomputable | Logical archive; permanent with account | User wins |
 | `chunks` | COMPUTED (+ embeddings from AI-04) | retrieval | retrieval | Upsert by `(source_item, chunk_index)` and model | Re-chunk/re-embed | Permanent with source deletion/purge/account | — |
 | `retrieval_traces` | COMPUTED | retrieval | evaluation | Insert | — | Permanent after 90 days or with account | — |
-| `reminders` | COMPUTED | attention | UI, notifications | State transitions (conditional updates) | Re-evaluate rules | Permanent with account; logical states otherwise | Fingerprint uniqueness |
-| `notifications` | COMPUTED | attention | UI | State transitions | — | Permanent after 30 days / account | Unique per reminder+channel |
+| `reminders` | COMPUTED (+ USER-AUTHORED snooze, dismiss, acted) | attention | UI, notifications | State transitions (conditional updates) | Re-evaluate rules | Permanent with account; logical states otherwise; terminal states older than 90 days purged | Fingerprint uniqueness |
+| `notifications` | COMPUTED | attention | UI | State transitions | — | Permanent after 30 days / account | Unique per reminder, channel and delivery |
+| `push_subscriptions` | USER-AUTHORED (browser grant) | attention | Web Push sender | Insert; revoke on user DELETE or push-service 404/410 | — | Permanent on DELETE / account | `UNIQUE (user_id, endpoint)` |
+| `priority_pairs` | USER-AUTHORED (derived from priority overrides; feature snapshots are COMPUTED) | attention | priority fitting, evaluation | Append-only | — | Permanent with account; older than 180 days purged | `UNIQUE` per pair |
+| `user_priority_weights` | COMPUTED (fitted per-user multipliers) | attention | priority recompute | Replaced by the nightly fit | Refit from `priority_pairs` | Permanent with account | One row per user |
 | `briefings` | COMPUTED (deterministic sections and headline) | attention | UI, chat | One per user-day | Re-render | Permanent after 30 days / account | — |
 | `feedback_events` | USER-AUTHORED | work/attention/people (writer of the corrected entity) | evaluation, learning | Append-only | — | Permanent with account | — |
 | `chat_sessions`, `chat_messages` | USER-AUTHORED (questions) + AI-DERIVED (answers with citation snapshots) | chat | chat, evaluation | Append-only | — | User can delete sessions (permanent); account | — |
@@ -491,6 +506,8 @@ Behavioural checks (what each role can actually do) are in RT-15 (§21).
 The privilege-matrix test classifies every Batch A table as a business table with `_user_isolation`, and checks the `users` exception exactly.
 
 **Phase 2 tables (migrations 0011–0017).** `chunks`, `entity_links`, `retrieval_traces`, `user_checkpoints`, `projects`, `project_members`, `chat_sessions` and `chat_messages` are user-owned business tables: ENABLE and FORCE RLS through `eca.platform.rls.user_isolation_ddl`, DML for both runtime roles through the default privileges of `0001`/`0002`, and no exception. The API role reads chunks and writes traces, checkpoints, projects and chat rows in the request's user transaction; the worker role writes chunks, links and project suggestions in the event's user transaction and deletes them in deletion and retention jobs, one user per transaction. No new cross-user policy is added. The API role's existing `ai_cost_rollups_api_read` policy is what the Phase 2 budget check reads (`AI_COST_MODEL.md` §7.1).
+
+**Phase 3 tables (migrations 0018–0023).** `reminders`, `notifications`, `push_subscriptions`, `briefings`, `priority_pairs` and `user_priority_weights` are user-owned business tables: ENABLE and FORCE RLS through `eca.platform.rls.user_isolation_ddl`, DML for both runtime roles through the default privileges of `0001`/`0002`, and no exception. The API role reads reminders and notifications and writes user state transitions (snooze, dismiss, acted, read), push subscriptions, on-demand briefings and priority pairs in the request's user transaction. The worker role evaluates and delivers reminders, writes notifications, generates briefings and fits weights in the event's or the sweep's user transaction, one user per transaction. Column additions to `persons` (0018) and `conversations` (0021) keep those tables' existing policies. No new cross-user policy is added. The Phase 3 budget guard reads `ai_cost_rollups` through the existing policies: the API role its own user's rows, the worker role all rows for the global budget (`AI_COST_MODEL.md` §7.2). Budget-cap audit rows are written by the worker's `cost_rollup` task through `audit_log_worker_all`.
 
 **Sign-in and session tables (slices 1.1, 1.2; migration 0009).**
 - `auth_sessions`, `deletion_jobs`: business tables under `_user_isolation`.
@@ -739,7 +756,7 @@ The hourly sweeper writes `became_overdue`, `due_soon`, `became_stale` events (`
 | Item–evidence links | Apply retried | PK `(item_type, item_id, evidence_id)` |
 | Item events (`context_events`) | Apply retried, handler replay, sweeper re-run, user double-submit | `UNIQUE(user_id, dedupe_key)`: model `sha256(extraction_id, candidate_index, event_type)`; time `sha256(entity, event_type, hour_bucket)`; user `sha256(idempotency_key or request_id, event_type)` |
 | Reminders | Sweep overlaps, event handlers | `UNIQUE(user_id, fingerprint)` (`CONTEXT_ARCHITECTURE.md`/`TECHNICAL_DESIGN.md` reminder fingerprint) |
-| Notifications (in-app, Web Push) | Sweep and handler both deliver | `UNIQUE(reminder_id, channel)`; conditional update `pending → sending → sent`; Web Push `Topic` header = reminder ID so the push service collapses undelivered duplicates. A crash after the push service accepted but before `sent` is recorded can cause one duplicate push (at-least-once at the network edge) |
+| Notifications (in-app, Web Push) | Sweep and handler both deliver | `UNIQUE(reminder_id, channel, seq)` (`seq` = the reminder's delivery number: a snoozed reminder is delivered again with `seq + 1`, §17.6); conditional update `pending → sending → sent`; Web Push `Topic` header = reminder ID (32 hex characters, the limit of RFC 8030 §5.4) so the push service collapses undelivered duplicates. A crash after the push service accepted but before `sent` is recorded can cause one duplicate push (at-least-once at the network edge): a `sending` row older than 10 minutes is returned to `pending` by the sweep and sent again, at most 3 attempts. Pushes carry no payload, so a duplicate shows the same notification-center entry again and leaks nothing |
 | Outbox events | — (written once in the business transaction) | Primary key; dispatch duplicates handled by `queueing_lock` + `event_consumptions` (§7.4) |
 | Event handler effects | At-least-once dispatch | `event_consumptions PRIMARY KEY(event_id, handler)` in the handler transaction |
 | Synchronization runs | Periodic + manual + webhook overlap | Procrastinate `lock` and `queueing_lock` `sync:{connection}:{resource}`; cursor lease |
@@ -1058,6 +1075,21 @@ Procrastinate is pinned exactly (`procrastinate==3.10.0`, slice 0.3; requires Py
 | `project_suggest` | projects | Nightly (`40 2 * * *`, `schedule`) | lock `project_suggest`; one transaction per user | `UNIQUE (user_id, hint_key)` on suggested projects |
 | `reembed` | retrieval | Operator only (`eca ops reembed --user … [--limit …] [--dry-run]`); never scheduled | — | Chunks whose `embedding_model` differs from the AI-04 model or is NULL; per chunk content hash |
 
+**Phase 3 jobs (decided 2026-10-03).** Rule details: `TECHNICAL_DESIGN.md` §15.4 (reminders), §12.8 (fitting); `AI_PIPELINE.md` §5.9 (AI-03, AI-08).
+
+| Task | Module | Trigger | Mode / lock | Idempotency |
+|---|---|---|---|---|
+| `attention.reminders_item`, `attention.reminders_conversation`, `attention.reminders_meeting` (`evaluate_reminders`) | attention | `WorkItemChanged`, `MessageNormalized`, `MeetingChanged` | consumption, queue `events`; the transaction takes `pg_advisory_xact_lock(hashtextextended('rem:' \|\| entity_id, 0))` | `UNIQUE (user_id, fingerprint)`; pending reminders whose material key changed are cancelled |
+| `reminder_sweep` | attention | Every 5 min (`*/5 * * * *`, `schedule`) | lock `reminder_sweep`; one transaction per user; due rows claimed with `FOR UPDATE SKIP LOCKED` | Full rule evaluation per user on the tick at minutes 0–4 of each hour; delivery (caps, quiet hours, acted-upon) on every tick; `ux_notifications`; stale `sending` push rows reset |
+| `attention.web_push` | attention | `ReminderDue` (published by the delivery transaction when it created a `web_push` notification) | `natural_key`, queue `events` (the HTTP call is outside any transaction) | Conditional `pending → sending` claim, then `sent`/`failed`; Topic = reminder ID |
+| `briefing_schedule` | attention | Every 15 min (`*/15 * * * *`, `schedule`) | lock `briefing_schedule`; one transaction per user | Publishes `BriefingDue` only in the hour before the user's work start on a work day, when no row exists for the local date |
+| `attention.daily_briefing` (`daily_briefing`) | attention | `BriefingDue` | consumption, queue `events`; advisory lock `brief:{user}:{date}` | `briefings` primary key `(user_id, date)`, insert `ON CONFLICT DO NOTHING` |
+| `relationship_profiles` | attention | Nightly (`20 3 * * *`, `schedule`); `PersonChanged` and `MessageNormalized` handlers recompute the persons involved | lock `relationship_profiles`; one transaction per user | Deterministic recompute (same inputs, same values) |
+| `attention.priority_person` (`recompute_priority`) | attention | `PersonChanged` | consumption | Pure projection (as the slice 1.8 handlers) |
+| `priority_fit` | attention | Nightly (`50 3 * * *`, `schedule`) | lock `priority_fit`; one transaction per user | Deterministic fit; row replaced |
+| `thread_summary_sweep` | retrieval | Every 5 min (`*/5 * * * *`, `schedule`) | lock `thread_summary_sweep`; one transaction per user | Claims a conversation by a conditional update of `summary_pending_through` to its latest relevant message and publishes `ThreadSummaryDue` only when the claim changed a row (the 10-minute debounce: the latest relevant message must be at least 10 minutes old) |
+| `retrieval.thread_summary` (`thread_summary`) | retrieval | `ThreadSummaryDue` (sweep or the user's request) | `natural_key`, queue `extract`; advisory lock `summary:{conversation}` in each transaction | Keyed by the last covered message: the result is stored only while `summary_pending_through` still equals the job's message; a stored summary for the same message is never recomputed |
+
 Per-user fairness: at most 4 concurrent `extract` jobs per user (checked at job start against running jobs for that user; excess re-deferred with a short delay), so one large import cannot starve other users.
 
 ---
@@ -1213,9 +1245,30 @@ Why cursor pagination: the collections here (changes, events, needs-response, it
 | `POST /api/v1/chat/sessions/{id}/messages` | Body `{text, conversation_id?}` (1–2,000 characters; `conversation_id` = the open email thread for S1 "what's this about?"). **`Idempotency-Key` required.** Rate limit 20/min per user (429 + `Retry-After`). Response `text/event-stream`; events in order: `plan` `{scenario, tier, planner}`, `sources` `{citations}`, `delta` `{text}` (the verified answer, after the grounding checks), `final` `{message}`, or `error` `{code, title}`. A replayed key whose answer is stored returns the same `final` message with `Idempotent-Replay: true`; a key still in progress is 409; a failed run releases its key so the client can retry |
 | `POST /api/v1/chat/messages/{id}/feedback` | `{rating: helpful \| not_helpful, reason?}` → `feedback_events`, 204 |
 
+### 16.8 Phase 3 route details (decided 2026-10-03)
+
+| Route | Detail |
+|---|---|
+| `GET /api/v1/people?q=&sort=importance\|recent&cursor=` | Each row adds the computed profile summary (`importance_inferred`, `open_mine`, `open_theirs`, last interaction) labelled `computed`; `sort=importance` orders by `importance_user`, then `importance_inferred`, then recency |
+| `GET /api/v1/people/{person_id}` | Person context (S2) from the slice 2.2 retriever with a fixed anchor (`planner = fixed`): deterministic card, profile fields each with `origin` (`user`, `computed`, `inferred`) and provenance, open items both directions (folded, with evidence source IDs), recent threads (30 days), last and next meetings, decisions from shared threads, coverage, notes. A merged person's ID returns the surviving person with `redirected_from`. No model call |
+| `PATCH /api/v1/people/{person_id}` | `importance_user` (1–5 or null), `role_title`, `display_name`, `relationship_type` (values in §17.6); `If-Match`; user fields at authority 5 (`persons.user_fields`); a `context_events` row (entity `person`, actor user), a `feedback_events` row and `PersonChanged` in the same transaction |
+| `POST /api/v1/people/{person_id}/merge` · `/aliases` | As slice 1.7, plus the same user event and `PersonChanged` |
+| `GET /api/v1/reminders?state=&cursor=` | `state` = `active` (default: `delivered` or `snoozed`, newest first), `pending`, `all`. Each reminder: type, rendered text (template over the current item fields; no stored content), fire and delivery times, `proactive`, provenance of the underlying item, `reason` (rule and its parameters) |
+| `POST /api/v1/reminders/{id}/snooze` | Body `{until}` or `{preset: 1h \| 3h \| tomorrow}` (until ≤ 7 days, after now); conditional transition from `pending`, `delivered` or `snoozed`; 409 otherwise. `Idempotency-Key` optional. A `feedback_events` row |
+| `POST /api/v1/reminders/{id}/dismiss` · `/acted` | Conditional transitions; repeating a command on a reminder already in that state is a no-op (200); a `feedback_events` row |
+| `GET /api/v1/notifications?unread=&cursor=` · `POST /api/v1/notifications/read` | In-app notification center (notifications joined to their reminders); `read` marks `{ids}` or everything up to `{before}` read |
+| `GET /api/v1/push-subscriptions/key` | `{public_key}` (VAPID, base64url) for `PushManager.subscribe`; 404 `push_not_configured` when the VAPID variables are unset |
+| `POST /api/v1/push-subscriptions` | Body = the browser's `PushSubscription` JSON; only `endpoint` (https, ≤ 1,000 characters) and `expirationTime` are stored (pushes carry no payload, so the encryption keys are not kept). Upsert by `(user_id, endpoint)`; 201 |
+| `DELETE /api/v1/push-subscriptions/{id}` | Revokes; 204; repeated DELETE 204 |
+| `GET /api/v1/briefings/{date}` | `date` is a local date. Today's briefing is generated on demand when the scheduled job has not run yet (deterministic, same function); a past date returns the stored row or 404. Body: headline, sections, `generated_at`, `updated_since_briefing` (`{material_changes, since}` or null) computed at read time |
+| `POST /api/v1/conversations/{id}/summary` | Requests AI-03 for the thread (any thread with at least 2 relevant messages). 202 with the conversation URL; 200 with the stored summary when it already covers the latest relevant message; 429 + `Retry-After` at the hard budget cap (`BudgetExceeded`). Rate limit 10/min |
+| `GET /api/v1/conversations/{id}` | Adds `gist_timeline` (date, sender, AI-01 gist; labelled AI-derived) and, when present, `summary` with its provenance (`model`, `prompt_version`, `derived_at`, `covered_source_ids`, `through_message_id`, `stale` when newer relevant messages exist) |
+| `POST /api/v1/conversations/{id}/reply-guidance` | Body `{instructions?}` (≤ 500 characters, user-authored intent such as "decline politely"). **`Idempotency-Key` required**; rate limit 10/min. `text/event-stream`: `sources` `{citations, coverage}`, then `final` `{guidance}` or `error`. `guidance` = sections `context`, `previous_agreement`, `current_status` (verified claims with kinds and citations), `draft` (a `recommendation`, "copy only"), `draft_warnings`, `tier` (`T2`, `abstain`, `degraded`), `notice`, provenance. The draft is never sent and never written to Gmail: no send, draft or calendar scope exists (`TECHNICAL_DESIGN.md` §10.2). The response is stored only as the idempotency response (24 h); a replay returns it with `Idempotent-Replay: true` |
+| `PATCH /api/v1/work-items/{id}` | Adds `priority_override` (`1`, `-1`, `0` or null). It is applied by `work.set_item_priority_override` (USER-AUTHORED column, `version` + 1, `context_events` and `feedback_events`), not by the fold; the same transaction records priority pairs (`TECHNICAL_DESIGN.md` §12.8). `PATCH /conversations/{id}` records pairs the same way |
+
 ### 16.6 Inbound rate limits
 
-Per user, enforced in the API process (in-memory token buckets; with ≤ 2 API instances the effective limit is at most 2× the configured value, which is acceptable because AI spend is bounded separately by budget caps): chat 20/min, reply guidance 10/min, uploads 10/hour (≤ 2 GB, ≤ 3 h), mutations 120/min, reads 600/min; auth endpoints 10/min per IP. Move to a shared store only if instances grow.
+Per user, enforced in the API process (in-memory token buckets; with ≤ 2 API instances the effective limit is at most 2× the configured value, which is acceptable because AI spend is bounded separately by budget caps): chat 20/min, reply guidance 10/min, thread summary requests 10/min, uploads 10/hour (≤ 2 GB, ≤ 3 h), mutations 120/min, reads 600/min; auth endpoints 10/min per IP. Move to a shared store only if instances grow.
 
 ---
 
@@ -1497,6 +1550,98 @@ Not built in Phase 2: `chunks.project_id` (TECHNICAL_DESIGN.md §9.1) — projec
 
 Deletion order additions (§13.3): account deletion runs `chat` → `retrieval` (chunks, traces) → `work` (now also `entity_links`) → … → `projects` (members, projects; after `work`, whose rows reference them) → `people` …; `identity.purge_sessions` also removes `user_checkpoints`. Source purge deletes the batch's chunks first (they reference source items, conversations and meetings) and the `continues` links of purged conversations. Provider deletion of one message deletes its chunks (`retrieval.index_removed`). Retention deletes the chunks of messages whose body was purged, and `retrieval_traces` older than 90 days.
 
+### 17.6 Phase 3 schema (decided 2026-10-03)
+
+One revision per concern; every new table gets ENABLE + FORCE RLS through `user_isolation_ddl` and the default DML grants (§7.6, "Phase 3 tables").
+
+| Revision | Slice | Objects |
+|---|---|---|
+| `0018_person_profile` | 3.4 | `persons.user_fields`, `persons.profile_computed_at`, `ck_persons_relationship_type` |
+| `0019_reminders` | 3.1 | `reminders`, `notifications` |
+| `0020_push_subscriptions` | 3.1 | `push_subscriptions` |
+| `0021_thread_summaries` | 3.2 | `conversations.summary_*` provenance columns |
+| `0022_briefings` | 3.2 | `briefings` |
+| `0023_priority_learning` | 3.5 | `priority_pairs`, `user_priority_weights` |
+
+```sql
+ALTER TABLE persons ADD COLUMN user_fields text[] NOT NULL DEFAULT '{}',   -- fields set at authority 5
+                    ADD COLUMN profile_computed_at timestamptz NULL;
+ALTER TABLE persons ADD CONSTRAINT ck_persons_relationship_type CHECK (relationship_type IN
+  ('executive','client','investor','manager','report','partner','stakeholder','colleague','vendor','other','low_priority'));
+-- relationship_type is user-set only in the MVP (PRD §14 sender categories); the computed profile lives in
+-- importance_inferred and interaction_stats->'profile' (CONTEXT_ARCHITECTURE.md §5.3)
+
+CREATE TABLE reminders (
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id),
+  item_type text NOT NULL CHECK (item_type IN ('work_item','conversation','meeting')), item_id uuid NOT NULL,
+  person_id uuid NULL REFERENCES persons(id),   -- counterparty used by dismissal learning (TECHNICAL_DESIGN.md §15.4)
+  reminder_type text NOT NULL CHECK (reminder_type IN ('deadline','overdue','commitment','waiting_for','follow_up','meeting_prep')),
+  slot text NOT NULL,                           -- day_before | due_day | cycle:<n> | once
+  fire_at timestamptz NOT NULL, first_fire_at timestamptz NOT NULL,
+  state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','delivered','snoozed','dismissed','acted','suppressed','cancelled')),
+  fingerprint bytea NOT NULL, material_key bytea NOT NULL,
+  reason jsonb NOT NULL,                        -- rule, template key, parameters, entity IDs; no source content
+  priority real NOT NULL DEFAULT 0, proactive_eligible boolean NOT NULL, proactive boolean NULL,
+  delivery_seq smallint NOT NULL DEFAULT 0, delivered_at timestamptz NULL, snoozed_until timestamptz NULL,
+  snooze_count smallint NOT NULL DEFAULT 0, closed_at timestamptz NULL, closed_reason text NULL,
+  version int NOT NULL DEFAULT 1, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX ux_reminders_fp ON reminders (user_id, fingerprint);
+CREATE INDEX ix_reminders_due ON reminders (fire_at) WHERE state IN ('pending','snoozed');
+CREATE INDEX ix_reminders_user_state ON reminders (user_id, state, fire_at DESC, id);
+CREATE INDEX ix_reminders_item ON reminders (user_id, item_type, item_id, reminder_type);
+
+CREATE TABLE notifications (
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), reminder_id uuid NOT NULL REFERENCES reminders(id),
+  channel text NOT NULL CHECK (channel IN ('in_app','web_push')), seq smallint NOT NULL,
+  state text NOT NULL CHECK (state IN ('pending','sending','sent','failed')),
+  attempts smallint NOT NULL DEFAULT 0, last_error text NULL, sent_at timestamptz NULL, read_at timestamptz NULL,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX ux_notifications ON notifications (reminder_id, channel, seq);
+CREATE INDEX ix_notifications_user ON notifications (user_id, created_at DESC, id) WHERE channel = 'in_app';
+CREATE INDEX ix_notifications_pending ON notifications (updated_at) WHERE state IN ('pending','sending');
+
+CREATE TABLE push_subscriptions (
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id),
+  endpoint text NOT NULL, expires_at timestamptz NULL, user_agent text NULL,
+  last_success_at timestamptz NULL, failure_count smallint NOT NULL DEFAULT 0, revoked_at timestamptz NULL,
+  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE (user_id, endpoint));
+
+ALTER TABLE conversations
+  ADD COLUMN summary_key_points jsonb NOT NULL DEFAULT '[]',          -- [{text, message_refs, source_item_ids}]
+  ADD COLUMN summary_method text NULL CHECK (summary_method IN ('llm')),
+  ADD COLUMN summary_model text NULL, ADD COLUMN summary_prompt_version text NULL,
+  ADD COLUMN summary_derived_at timestamptz NULL, ADD COLUMN summary_ai_call_ids uuid[] NOT NULL DEFAULT '{}',
+  ADD COLUMN summary_covered_source_ids uuid[] NOT NULL DEFAULT '{}',
+  ADD COLUMN summary_pending_through uuid NULL, ADD COLUMN summary_failed_through uuid NULL,
+  ADD COLUMN summary_requested_at timestamptz NULL;
+-- summary_through_message_id (0007) is the key: the last relevant message the summary covers
+
+CREATE TABLE briefings (
+  user_id uuid NOT NULL REFERENCES users(id), date date NOT NULL, timezone text NOT NULL,
+  headline text NOT NULL, content jsonb NOT NULL,                     -- sections with entity IDs and provenance labels
+  generated_at timestamptz NOT NULL, trigger text NOT NULL CHECK (trigger IN ('schedule','on_demand')),
+  PRIMARY KEY (user_id, date));
+
+CREATE TABLE priority_pairs (
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id),
+  preferred_type text NOT NULL CHECK (preferred_type IN ('work_item','conversation')), preferred_id uuid NOT NULL,
+  other_type text NOT NULL CHECK (other_type IN ('work_item','conversation')), other_id uuid NOT NULL,
+  preferred_features jsonb NOT NULL, other_features jsonb NOT NULL,   -- feature values only (no content)
+  source text NOT NULL CHECK (source IN ('override_up','override_down')),
+  config_version text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, preferred_type, preferred_id, other_type, other_id));
+CREATE INDEX ix_priority_pairs_user ON priority_pairs (user_id, created_at DESC);
+
+CREATE TABLE user_priority_weights (
+  user_id uuid PRIMARY KEY REFERENCES users(id),
+  multipliers jsonb NOT NULL, pairs_used int NOT NULL, agreement real NOT NULL,
+  config_version text NOT NULL, fitted_at timestamptz NOT NULL);
+```
+
+`TECHNICAL_DESIGN.md` §9.1 lists `briefings.ai_call_id`; it is not built because AI-12 is retired and the briefing makes no model call. `reminders.reason` and `briefings.content` hold IDs, rule parameters and rendered titles of the user's own items (the same AI-derived titles `work_items` stores); never message bodies.
+
+Deletion order additions (§13.3): account deletion runs `chat` → `attention` (notifications, reminders, push subscriptions, briefings, priority pairs and weights) → `retrieval` → …; retention deletes notifications older than 30 days, briefings older than 30 days, reminders in a terminal state (`dismissed`, `acted`, `suppressed`, `cancelled`) closed more than 90 days ago, and priority pairs older than 180 days. Source purge and provider deletion leave reminders of deleted items in place; the sweep cancels a reminder whose item no longer exists or is closed.
+
 ---
 
 ## 18. Caching
@@ -1504,9 +1649,11 @@ Deletion order additions (§13.3): account deletion runs `chat` → `retrieval` 
 | Cache | Key | Invalidation |
 |---|---|---|
 | Meeting prep sections and asks (`meetings.prep_brief`) | Meeting + max `version` of included entities | Version change → sections recomputed; asks regenerated on next open |
-| Daily briefing (`briefings`) | `(user_id, date)` | One per day; "updated since briefing" banner on later material changes |
+| Daily briefing (`briefings`) | `(user_id, date)` | One per day, never regenerated; "updated since briefing" banner computed at read time: `context_events` with materiality ≥ 2 recorded after `generated_at`, plus conversations newly awaiting the user's reply |
 | Access tokens | Connection ID, in process memory | Expiry − 60 s |
-| Model registry, prices, priority weights | Process memory | Reload on deploy |
+| Model registry, prices, budgets, priority weights | Process memory | Reload on deploy |
+| Per-user AI spend (budget guard, `AI_COST_MODEL.md` §7.2) | User ID, in process memory | 60 s |
+| Per-user priority multipliers | Read per recompute from `user_priority_weights` | Nightly fit |
 | Item `ETag` | `version` | Natural |
 | Gemini implicit caching | Stable prompt prefix | Provider-managed |
 

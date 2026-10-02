@@ -284,6 +284,25 @@ Answer schema (AI-06, AI-07; AI-08 adds `context`, `previous_agreement`, `curren
 
 **Answer provenance.** `chat_messages.provenance` stores `{source: [source refs of cited items], confidence_band, derived_at, extraction_method: llm | deterministic, model, prompt_version, ai_call_ids, evidence: [evidence IDs]}`. Answers report a band, not a number, so the `Provenance` model of §5.1 (numeric confidence) is not used for answers.
 
+### 5.9 Phase 3 implementation details (decided 2026-10-03)
+
+**AI-03 `thread_summary` (`thread_summary.v1`).**
+- *Relevant message* = a live message of the thread with an applied AI-01 triage (prefiltered mail has none).
+- *Trigger:* the debounced sweep for threads with ≥ 8 relevant messages whose newest relevant message is at least 10 minutes old, or the user's request (threads with ≥ 2 relevant messages). Never for a thread whose summary already covers its newest relevant message (`summary_through_message_id`), and not again for a message that failed (`summary_failed_through`).
+- *Input* (no summary-of-summary): the newest 20 relevant messages, oldest first, each as `[Mn] date · sender · direction` and its clean body cut to 400 tokens (its AI-01 gist when the body was purged by retention), at most 6,000 tokens in total (older messages dropped first); every body is delimited untrusted data.
+- *Output:* `{summary: string ≤ 900 characters, key_points: [{text ≤ 300 characters, messages: ["M3", …]}] (≤ 6)}`. Key points citing no existing `Mn` are dropped. The summary is narrative and always labelled "AI summary"; it never sets item state.
+- *Provenance:* `conversations.summary_*` (`BACKEND_DESIGN.md` §17.6): method `llm`, model, prompt version, `derived_at`, AI call IDs, `covered_source_ids` (the source items of the included messages) and `summary_through_message_id`.
+- *Calls:* primary, one retry, one fallback (the interactive policy of §7, because the job keeps no extraction row); after that the failure is recorded for that message and the gist timeline stays the thread summary (§14).
+
+**Gist timeline** (O2): deterministic rendering of the newest 8 relevant messages: local date, sender label and the stored AI-01 gist (`messages.triage.gist`), labelled AI-derived. No model call.
+
+**AI-08 `reply_guidance` (`reply_guidance.v1`).**
+- *Packet* (budget: dynamic 4,000, hard 8,000 tokens; scenario `RG`): the S1 email-context retriever for the thread, the S2 person-context retriever for the newest inbound sender (fixed anchor), the gist timeline or the AI-03 summary, the last 3 messages (clean text, ≤ 400 tokens each, delimited), coverage, and the user's optional instructions as the question (delimited; user-authored notes are never packed).
+- *Output:* `{answerable, context: [claim] (≤ 5), previous_agreement: [claim] (≤ 5), current_status: [claim] (≤ 5), draft: string ≤ 2,000 characters | null, confidence, missing_info}` with the §5.7 claim structure.
+- *Checks:* the §5.7 grounding checks run on each section's claims (citations exist; dates, numbers and names of `source` claims appear in the cited items; `absence` cites coverage; `user` claims cite user-backed items; anything else is relabelled and flagged). The draft is a `recommendation`: shown as "Suggestion — draft for copying; review before sending", never as fact. Numbers, dates and capitalized names in the draft that appear in no packet item are listed as `draft_warnings` ("not found in the sources"); the draft is kept, so the user sees exactly what is unsupported. `answerable = false` or no surviving `source`/`user` claim → the abstention template with coverage and no draft.
+- *Degradation:* model failure or the hard budget cap → the deterministic context section (thread card, open items both directions, last message gist) without a draft, with a notice (§14).
+- *Never sent:* no send, draft or calendar action exists (read-only scopes, PRD §51 Level 3 is outside the MVP); the result is stored only as the request's idempotency response for 24 hours.
+
 ---
 
 ## 6. Pipelines
@@ -409,7 +428,7 @@ Because statements (not final types) are stored, changes to the §5.5 mapping ar
 - Order: stable instructions and schema → user card → candidates or packet → delimited untrusted content → question.
 - Untrusted content is declared as data; no side-effecting tools (`TECHNICAL_DESIGN.md` §17.6).
 - Up to 3 of the user's recent rejections from the same sender as negative examples in AI-01 (deterministic selection). Few-shot examples come only from the `dev` split.
-- Phase 2 prompts and schemas: `plan_query/v1.md` with `output_schemas/plan_query.py` (`plan_query.v1`); `answer_lookup/v1.md` with `output_schemas/answer_lookup.py` and `answer_synthesis/v1.md` with `output_schemas/answer_synthesis.py` (both `answer.v1`). AI-04 has no prompt file; its input format is the version string `embed/v1` (`CONTEXT_ARCHITECTURE.md` §9.10). Interactive calls (AI-05, AI-06, AI-07) follow the interactive attempt policy of §7: primary, one retry, one fallback call, then degradation.
+- Phase 2 prompts and schemas: `plan_query/v1.md` with `output_schemas/plan_query.py` (`plan_query.v1`); `answer_lookup/v1.md` with `output_schemas/answer_lookup.py` and `answer_synthesis/v1.md` with `output_schemas/answer_synthesis.py` (both `answer.v1`). AI-04 has no prompt file; its input format is the version string `embed/v1` (`CONTEXT_ARCHITECTURE.md` §9.10). Interactive calls (AI-05, AI-06, AI-07) follow the interactive attempt policy of §7: primary, one retry, one fallback call, then degradation. Phase 3: `thread_summary/v1.md` with `output_schemas/thread_summary.py` (`thread_summary.v1`) and `reply_guidance/v1.md` with `output_schemas/reply_guidance.py` (`reply_guidance.v1`); both use the interactive policy (§5.9).
 
 ---
 

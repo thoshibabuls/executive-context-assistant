@@ -205,6 +205,21 @@ Computed nightly and on interaction (deterministic):
 
 Person-to-person relationships beyond co-participation (for example "Sarah reports to John") are **not** modelled in the MVP; no PRD scenario requires them.
 
+**Phase 3 parameters (decided 2026-10-03).** Computed by `attention` and written through `people.set_relationship_profile` (`BACKEND_DESIGN.md` §5.2) into `persons.importance_inferred` and `persons.interaction_stats.profile`. Writing the profile does not change `persons.version` (the version guards user edits only).
+
+| Field | Rule |
+|---|---|
+| Window | 30 days |
+| `importance_inferred` | `decay × (0.30·reciprocity + 0.20·meetings + 0.15·role + 0.15·organization + 0.20·open_items)`, rounded to 3 decimals. Reciprocity: 1 if mail went both ways in the window, 0.5 if only the user wrote, 0.25 if only the person wrote, else 0. Meetings: `min(meetings together / 4, 1)`. Role: 1 if the role title contains an executive keyword (chief, ceo, cto, cfo, coo, president, founder, vp, vice president, director, head, partner, owner), else 0. Organization: the organization's `importance_user` / 5. Open items: `min((open_mine + open_theirs) / 3, 1)`. Decay: `0.5^(days since last_interaction_at / 60)` (§11.2). The reply-speed term of the table above is not computed in the MVP (it needs per-message reply pairing); its weight is not redistributed |
+| `open_mine` / `open_theirs` | Open items with the person: `my_commitment`/`my_task` (user owes) and `waiting_for`/`delegated` (they owe), over the person and every person merged into it |
+| `interaction_recency_days` | Whole days since the later of `last_inbound_at` and `last_outbound_at`, only when both exist (two-way); else null |
+| `active_topics` | Up to 3: the most frequent normalized project hints of the person's items (AI-derived, labelled `inferred`) and subjects of threads with the person in the window (`computed`); ties by recency |
+| `last_meeting_at`, `next_meeting_at` | Calendar meetings with the person as attendee (30 days back, 14 days ahead) |
+| Triggers | Nightly `relationship_profiles`; `PersonChanged` (that person); `MessageNormalized` (the message's participants, at most 10) |
+| User fields | `importance_user`, `relationship_type`, `role_title` (with `role_origin = user`) and a user-set `display_name` are recorded in `persons.user_fields`; computed or header-derived updates never change them |
+| Merged persons | Skipped; the surviving person's profile covers the merged IDs. A merged ID in a URL redirects to the surviving person |
+| Card | Deterministic template from the row and the profile (§9.5); every field carries its origin: `user`, `computed` or `inferred` |
+
 ---
 
 ## 6. Retrieval method comparison and the knowledge-graph question
@@ -422,6 +437,7 @@ Cards are rendered deterministically at request time from the entity's current r
 | 10 Yesterday | deterministic day view; T2 if detail asked | 4 K | 8 K | 1 s / 6 s |
 | 11 What changed | T2 (deterministic grouped list if T2 unavailable) | 5 K | 10 K | 6 s |
 | 12 Next action | T2 (short) | 4 K | 8 K | 5 s |
+| RG Reply guidance (Phase 3, `AI_PIPELINE.md` §5.9) | T2 (AI-08) | 4 K | 8 K | 6 s |
 
 Answer tiers map to `AI_PIPELINE.md`: deterministic = rendered from structured results with citations, no AI call; T1 = AI-06 (lookups over retrieved text); T2 = AI-07 (AI-08 for reply guidance, AI-11 for meeting asks). Every route runs the abstention pre-check and grounding checks (`AI_PIPELINE.md` §5.7).
 

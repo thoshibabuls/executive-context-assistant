@@ -1,6 +1,6 @@
 # Implementation Plan — Executive Context Assistant
 
-**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete). Phase 1: code written, untested (§0.5). Phase 2: code complete, tests deferred (§0.6) — not complete until its tests and exit criteria pass
+**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete). Phase 1: code written, untested (§0.5). Phase 2: code complete, tests deferred (§0.6) — not complete until its tests and exit criteria pass. Phase 3: in progress — coding only; tests deferred (§0.7)
 **Date:** 2026-10-02
 **Authority:** Execution order, slices, deliverables and exit criteria. Architecture is defined in `TECHNICAL_DESIGN.md` and the documents in its §5.1; this plan must not introduce behaviour or architecture that those documents do not describe (`CLAUDE.md`: "If implementation requires changing product behavior, stop and update the appropriate document first").
 
@@ -86,6 +86,29 @@ Existing test files were edited only to move the migration head constants and pe
 **Experiments deferred:** X6 (chat routing per intent) and X7 (is the planner needed?) are not run in this task. The code implements the default routes of `AI_PIPELINE.md` §4 and §8.2; X6 and X7 decide them on the frozen dataset later.
 
 **Phase 2 decisions recorded in the authoritative documents before coding:** module dependencies and the import-linter contracts (`BACKEND_DESIGN.md` §5.2), RLS and roles of every new table (§7.6), Phase 2 schema and migrations (§17.5), jobs (§15), API details (§16.7); chunking, search, ranking, coverage, scope and packet parameters (`CONTEXT_ARCHITECTURE.md` §9.10); thread continuation and time-sweep parameters (§12.7); session context (§13); AI-04/05/06/07 prompts, schemas and grounding details (`AI_PIPELINE.md` §5.8, §11); Phase 2 budget guardrails (`AI_COST_MODEL.md` §7.1).
+
+### 0.7 Phase 3 status — in progress, coding only; tests deferred
+
+At the owner's instruction ("Phase 3 — coding only; testing is deferred to a later task"), slices 3.1–3.5 are written in the order 3.5a (budget guardrails) → 3.4 → 3.1 → 3.2 → 3.3 → 3.5b (priority fitting) without writing or running any test. Static checks (ruff, ruff format, mypy strict, lint-imports) run through the pre-commit hooks on every commit. No live Gemini call is made and experiment X3 is not run. Phase 3 is **not complete** until the deferred tests below and the Phase 3 exit criteria (§5) pass. It builds on the untested Phase 1 and Phase 2 code (§0.5, §0.6) and inherits that risk.
+
+**Preconditions found (2026-10-03).** Priority v1 and Today (1.8), corrections and `feedback_events` (1.7), retrieval S2 and packet assembly (2.2), the change feed (2.3), chat (2.4), `eca.intelligence` (roles, attempt caps, meter, roll-ups), auth, CSRF, `Idempotency-Key` handling and the web app with its generated TypeScript client exist in code; none is verified by tests (CI run 4: `test` red, §0.6). Per-user soft and hard caps existed only as code constants checked by chat and indexing (§7.1 of `AI_COST_MODEL.md`): no configuration, no enforcement inside the AI client, no audit, no global budget and no degradation route for AI-01/02/03/08/11, so slice 3.5a builds them first.
+
+**Deferred tests** (from the Tests column of §5; none written or run in this task):
+
+| Slice | Deferred tests |
+|---|---|
+| 3.1 Reminders | RT-09 (two concurrent sweeps: one reminder, one notification per channel); E9 (`AI_EVALUATION.md` §4.9: precision, false-positive rate, miss rate on the simulated clock, suppression correctness) |
+| 3.2 Summaries and briefing | E12 (`AI_EVALUATION.md` §4.12: key-point coverage, unsupported statements, gist faithfulness, briefing sections and headline vs structured state, daily email summary counts); cost per user measured from `ai_calls`/`ai_cost_rollups`; experiment X3 (AI-03 vs gist timelines for threads of 3–8 messages) |
+| 3.3 Reply guidance | Human review sample (previous agreement and status correct; no invented commitments or facts in drafts, `AI_EVALUATION.md` §4.10) |
+| 3.4 People | S2 suite (`CONTEXT_EVALUATION.md`: open items both directions set F1, 30-day timeline recall, mention-derived interactions) |
+| 3.5 Priority fitting and budgets | E5 (`AI_EVALUATION.md` §4.5); budget-cap tests (soft and hard caps per role, degradation routes, `BudgetExceeded` → 429 + `Retry-After`, global budget, audit rows) |
+| Phase 3 exit | PRD §57 items 4, 10, 11, 20, 22 demonstrable; E5 and E9 targets met |
+
+Also deferred: unit tests of the new pure functions (reminder rules, keys, slots, quiet hours, caps and learning bounds; relationship-profile formula; briefing sections, counts and headline; gist timeline; reply-guidance draft check; priority pair selection and the bounded fit; budget policy), integration tests of migrations 0018–0023 (up/down/up, privilege matrix, RLS fail-closed on every new table, RT-15 extension), API tests of the new routes (409/422, `Idempotency-Key` replay, rate limits, 404 on other users' IDs, 429 on budget), Web Push against a stub push service, and the deletion and retention paths that now include the attention tables (RT-10, RT-11 extensions).
+
+**Experiments deferred:** X3 (AI-03 vs gist timelines) is not run in this task; the code implements the default routing of `AI_PIPELINE.md` §5.9 (AI-03 only for threads with ≥ 8 relevant messages or on request).
+
+**Phase 3 decisions recorded in the authoritative documents before coding:** module placement and dependencies, plus two new import-linter contracts (`attention` and `people` never import `intelligence`) (`BACKEND_DESIGN.md` §5.2); RLS and roles of every new table (§7.6); schema and migrations 0018–0023, including the `notifications` key `(reminder_id, channel, seq)` and the `priority_pairs` schema (§17.6, §10.1); jobs (§15); routes (§16.8); reminder rule parameters, quiet hours and Web Push key handling (`TECHNICAL_DESIGN.md` §15.4); priority fitting (§12.8); budget configuration, guard and degradation routes (`AI_COST_MODEL.md` §7.2); AI-03, gist timeline and AI-08 details (`AI_PIPELINE.md` §5.9); relationship-profile parameters and the reply-guidance budget (`CONTEXT_ARCHITECTURE.md` §5.3, §9.6); the `priority_pairs.jsonl` label format (`AI_EVALUATION.md` §4.5).
 
 ### 0.1 CI evidence (GitHub Actions)
 
@@ -478,6 +501,8 @@ Provider deletion flow (§9.3), source purge on disconnect, account deletion job
 | 3.5 Priority fitting and budgets | Fit weights on `priority_pairs`, per-user learning bounds, cost guardrails and degradation routes (`AI_COST_MODEL.md` §7, `AI_PIPELINE.md` §8.4) | E5; budget-cap tests |
 
 **Phase 3 exit:** PRD §57 items 4, 10, 11, 20, 22; E5 and E9 targets.
+
+**Status:** in progress — coding only; tests deferred (§0.7). Build order 3.5a (budget guardrails) → 3.4 → 3.1 → 3.2 → 3.3 → 3.5b (priority fitting), because 3.2 and 3.3 add AI calls that must run behind the guardrails.
 
 ---
 

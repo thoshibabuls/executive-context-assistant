@@ -161,6 +161,8 @@ Targets are MVP release targets on the `test` split; the gate rules in §8 use t
 
 Weights are fitted on `priority_pairs` in `dev` and validated on `test`.
 
+`labels/priority_pairs.jsonl` (format decided 2026-10-03; the labels are not written yet): one JSON object per line, `{"pair_id", "split", "a": {"kind": "work_item" | "conversation", "case_id", "features": {<feature>: value in [0, 1]}}, "b": {…}, "preferred": "a" | "b", "reviewers": […]}`, with the §12.6 feature names of `TECHNICAL_DESIGN.md`. Pairwise agreement = the share of pairs where the preferred side scores higher. The offline fit and its agreement are produced by `eca ops priority-fit --pairs … --split dev` (`TECHNICAL_DESIGN.md` §12.8). Online, the per-user pairs that users create by overriding priorities are stored in `priority_pairs` with the same feature names, and `user_priority_weights.agreement` reports the fitted agreement per user.
+
 ### 4.6 E6 — Retrieval relevance
 
 | Metric | Method | Target |

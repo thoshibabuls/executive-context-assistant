@@ -208,3 +208,12 @@ name = "projects never imports retrieval or chat"
 type = "forbidden"
 source_modules = ["eca.projects"]
 forbidden_modules = ["eca.retrieval", "eca.chat"]
+
+# ---------------------------------------------------------------- Phase 3 dependency rules (§5.2)
+[[tool.importlinter.contracts]]
+name = "attention and people never import intelligence (priority, reminders, briefings and profiles are deterministic)"
+type = "forbidden"
+source_modules = ["eca.attention", "eca.people"]
+forbidden_modules = ["eca.intelligence"]
+# Direct imports only: attention reads work, which orchestrates extraction through intelligence.
+allow_indirect_imports = "True"
