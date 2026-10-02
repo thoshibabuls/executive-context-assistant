@@ -12,7 +12,7 @@ from eca.api.app import create_app
 from eca.platform import errors
 from eca.platform.config import Settings
 
-HEAD = "0009"
+HEAD = "0010"
 
 
 def _client(app: FastAPI) -> TestClient:

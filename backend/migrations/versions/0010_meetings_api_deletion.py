@@ -6,7 +6,8 @@
   table (keyed by user).
 - Account deletion (slice 1.9) runs as the worker role per user: the worker may DELETE only its
   own (``app.user_id``) users row, and only once the row is ``deleting``
-  (``users_worker_delete``). ``audit_log.user_id`` is nulled before the user row goes.
+  (``users_worker_delete``). The user's ``audit_log`` rows are deleted and one content-free
+  record without a user is kept (the worker has no UPDATE on ``audit_log``).
 
 Revision ID: 0010
 Revises: 0009

@@ -11,11 +11,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from eca.api.auth import router as auth_router
 from eca.api.connections import router as connections_router
+from eca.api.context import router as context_router
 from eca.api.health import router as health_router
 from eca.api.middleware import RequestIdMiddleware
 from eca.api.problems import install_problem_handlers
+from eca.api.work import router as work_router
 from eca.identity import JwksCache
 from eca.platform.config import Settings, get_settings
+from eca.platform.cursors import CursorCodec
 from eca.platform.db import create_engine, create_session_factory
 from eca.platform.health import migration_head
 from eca.platform.logging import configure_logging
@@ -52,6 +55,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.migration_head = migration_head()
         app.state.http = httpx.AsyncClient()
         app.state.jwks = JwksCache(app.state.http)
+        key = settings.cursor_signing_key.get_secret_value() if settings.cursor_signing_key else None
+        app.state.cursors = CursorCodec(key)
         try:
             yield
         finally:
@@ -79,6 +84,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(connections_router)
+    app.include_router(work_router)
+    app.include_router(context_router)
     return app
 
 

@@ -120,7 +120,10 @@ Media processing (ffmpeg) runs on the `media` queue with concurrency 1 in the sa
 
 ```text
 chat → retrieval → (read) work · people · projects · meetings · communication
-attention → work · communication · meetings · people        (writes priority via their services)
+attention → work · communication · meetings · people · identity   (writes priority via their services; user list and timezone)
+privacy → identity · connections · ingestion · communication · meetings · people · work · intelligence
+                                                              (deletion and retention jobs call each module's purge functions;
+                                                               imported only by eca.api and eca.worker)
 meetings → intelligence · people · ingestion
 chat · retrieval → intelligence                               (model calls only, through its public API; §5.4)
 work → intelligence · communication · people · projects · ingestion   (email extract orchestration and apply; §5.6)
@@ -473,7 +476,7 @@ No runtime role holds TRUNCATE, REFERENCES or TRIGGER on any table, or UPDATE on
 Behavioural checks (what each role can actually do) are in RT-15 (§21).
 
 **Batch A tables (identity, people, connections, ingestion, communication, work, intelligence).** Every new table is a user-owned business table with `<table>_user_isolation` for all roles and DML for both runtime roles by default privileges, with these exceptions, which are the only cross-user or reduced grants:
-- **`users`** (keyed by `id`, so its policy compares `id`): the API role keeps DML on its own row. The worker role has **no** table-level privilege except column SELECT on `(id, status, timezone, work_hours)`, and the policy `users_worker_enumerate FOR SELECT TO eca_worker USING (true)`. This is the one cross-user read on a business table (§7.6 "Processing many users safely"): the worker can list user IDs, status and timezone for per-user scans and date resolution, and can read no email, name or other content of any user. The worker needs no INSERT, UPDATE or DELETE on `users` in Batch A (account deletion, slice 1.9, adds what it needs).
+- **`users`** (keyed by `id`, so its policy compares `id`): the API role keeps DML on its own row. The worker role has **no** table-level privilege except column SELECT on `(id, status, timezone, work_hours)`, and the policy `users_worker_enumerate FOR SELECT TO eca_worker USING (true)`. This is the one cross-user read on a business table (§7.6 "Processing many users safely"): the worker can list user IDs, status and timezone for per-user scans and date resolution, and can read no email, name or other content of any user. The worker needs no INSERT, UPDATE or DELETE on `users` in Batch A. Slice 1.9 (migration 0010) adds `GRANT DELETE ON users` to the worker with the policy `users_worker_delete FOR DELETE TO eca_worker USING (id = eca_current_user_id() AND status = 'deleting')`: the account deletion job deletes only its own user's row, and only after the request marked it `deleting`.
 - **`sync_cursors`** gains a `user_id` column (not in the §11.1 DDL), so it is isolated per user like every business table.
 - No other cross-user policy is added. Join tables without their own `user_id` in the abridged DDL (`message_participants`, `item_evidence`) carry `user_id` for RLS.
 The privilege-matrix test classifies every Batch A table as a business table with `_user_isolation`, and checks the `users` exception exactly.
@@ -481,7 +484,7 @@ The privilege-matrix test classifies every Batch A table as a business table wit
 **Sign-in and session tables (slices 1.1, 1.2; migration 0009).**
 - `auth_sessions`, `deletion_jobs`: business tables under `_user_isolation`.
 - `oauth_states`: single-use OAuth `state` rows (SHA-256 of the state, PKCE verifier, nonce; 10-minute expiry). They exist before a user is known, so they are not user-scoped: `oauth_states_api_all FOR ALL TO eca_app`, no worker access.
-- `audit_log` (owned by `privacy`, written through `platform.audit`): API INSERT only, for its own user or NULL (pre-sign-in failures); worker SELECT, INSERT and DELETE (retention).
+- `audit_log` (owned by `privacy`, written through `platform.audit`): API INSERT only, for its own user or NULL (pre-sign-in failures); worker SELECT, INSERT and DELETE (retention). The worker has no UPDATE, so account deletion deletes the user's audit rows and inserts one content-free `account_deleted` record with `user_id` NULL (slice 1.9).
 - Two `SECURITY DEFINER` functions, EXECUTE for the API role only, are the API's only pre-authentication reads: `eca_signin_user_id(sub, email)` returns the user ID for a verified Google identity; `eca_session_user_id(hash)` returns the user ID of an active session token hash. Each returns one UUID and nothing else; every later query runs under that user's RLS.
 
 **AI telemetry tables (slice 0.4).** `ai_calls` and `ai_cost_rollups` hold IDs and numbers, never content (§6.2), so they are classified with the delivery infrastructure: isolated per role by grants and role-targeted policies, not business tables under `_user_isolation`.

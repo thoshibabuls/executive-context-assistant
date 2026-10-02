@@ -8,7 +8,7 @@
 
 ## 0. Implementation status
 
-Last updated 2026-10-02 (slice 0.3 locally verified; slices 0.4 and 0.5 implemented, local results in §0.4; CI run 2: lint and test pass, overall red because of the `secrets` job).
+Last updated 2026-10-02 (Phase 1 slices 1.1–1.9 code written and untested, §0.5; slice 0.3 locally verified; slices 0.4 and 0.5 implemented, local results in §0.4; CI run 2: lint and test pass, overall red because of the `secrets` job).
 
 | Slice | Code | Verification |
 |---|---|---|
@@ -20,7 +20,7 @@ Last updated 2026-10-02 (slice 0.3 locally verified; slices 0.4 and 0.5 implemen
 
 ### 0.5 Phase 1 code status (2026-10-02) — code written, NOT tested
 
-At the owner's instruction ("code only, no tests"), slices 1.1–1.5 were written without running any test. Static checks were run and pass: ruff, ruff format, mypy strict (131 source files), lint-imports (10 contracts kept). **No pytest run covers migrations 0008–0009 or any slice 1.1, 1.2, 1.4 or 1.5 code; no slice below is "locally verified".**
+At the owner's instruction ("code only, no tests"), slices 1.1–1.9 were written without running any test. Static checks were run and pass: ruff, ruff format, mypy strict (140 source files), lint-imports (10 contracts kept); the web app passes `tsc --noEmit`. **No pytest run covers migrations 0008–0010 or any slice 1.1, 1.2 or 1.4–1.9 code; no slice below is "locally verified".** Test files were only edited (migration head `0010`, per-revision table sets), not run.
 
 | Slice | Code on `claude/practical-allen-tqqjse` | Tests | Not done |
 |---|---|---|---|
@@ -28,9 +28,13 @@ At the owner's instruction ("code only, no tests"), slices 1.1–1.5 were writte
 | 1.2 Connections | Connect with incremental scopes, envelope-encrypted refresh tokens (AES-256-GCM, KEK from env), `granted_scopes` and capability gating, disconnect with revoke, `needs_reauth` on `invalid_grant`, routes | Not written / not run | Token-never-logged and denied-scope tests; source purge on disconnect (1.9) |
 | 1.3 Ingestion core | As committed in `695e282` | Written; individual files passed during development; full suite not run | RT tests not run as a full suite |
 | 1.4 Extract and apply | Migration 0008, AI-01 v1 prompt/schema, extraction lifecycle, apply (grounding, dates, mapping, confidence, matching, evidence, events, fold, triage), AI-02 behind the disabled role, R1/R2 | Not written / not run | RT-01 complete, RT-02/02b/03/03b/12/13/14, E1–E4, E13, E14, DIR-120, CC chains at L2; placeholder cassettes; baseline; X1/X2 runners |
-| 1.5 Gmail adapter | `history.list` incremental, profile `historyId` before import, 30-day import with page tokens, 404 → bounded re-sync, label → neutral categories, 4,500 units/min bucket | Not written / not run | Contract tests with recorded fixtures (404, 429, `invalid_grant`); deletions (§9.3, slice 1.9) |
+| 1.5 Gmail adapter | `history.list` incremental, profile `historyId` before import, 30-day import with page tokens, 404 → bounded re-sync, label → neutral categories, 4,500 units/min bucket | Not written / not run | Contract tests with recorded fixtures (404, 429, `invalid_grant`) |
+| 1.6 Calendar adapter | Migration 0010 (`meetings`, `meeting_participants`); `events.list` with `singleEvents`, window −30/+60 days, cursor `query_fingerprint|syncToken`, etag skip, 410 → bounded re-sync, daily roll-forward; `meetings` module (upsert, participants diff, cancellations, `MeetingChanged`) | Not written / not run | Contract tests |
+| 1.7 Work API | Routes for work items (keyset signed cursors, `ETag`, `If-Match` → 412, `base_version` → field-level 409, `Idempotency-Key` on create, commands confirm/reject/complete/reopen/cancel/start, merge, delete of user items), decisions, evidence, conversations (needs-response, detail, mark-handled, `priority_override`), people (list, context, patch, merge, aliases), organizations, meetings, sources; `feedback_events` on every correction; `idempotency_keys`; OpenAPI exported to `web/openapi.json` and TypeScript types generated (`web/lib/schema.d.ts`) | Not written / not run | API tests (412/409/422, cursors, idempotent replay, RLS 404s) |
+| 1.8 Priority and Today | `attention`: features and score per TECHNICAL_DESIGN §12.6 with **initial, unfitted** weights in `config/priority.yaml`; writes through `work.set_item_priority` / `communication.set_conversation_priority` with version checks; handlers on `WorkItemChanged`, `MessageNormalized`, `MeetingChanged`; 15-minute sweep; `GET /api/v1/today`; minimal Next.js `web/` (Today and Tasks pages, confirm/reject/edit/done, provenance labels, evidence links) | Not written / not run | Priority unit tests, weight fitting on labelled pairs (AI_EVALUATION §4.5), UI tests |
+| 1.9 Deletion and retention | Provider deletion (`SourceItemDeleted`: bodies purged, evidence quotes redacted, items archived or `has_source_gap`, meetings cancelled); source purge on disconnect (`?purge=true`, batched, tombstones where redacted evidence of user-touched items remains); account deletion job (ordered, resumable, progress in `deletion_jobs`; tokens revoked; `ai_calls.user_id` → NULL; roll-ups folded into NULL-user rows; event consumptions and outbox; the user's audit rows replaced by one content-free record; user row deleted under `users_worker_delete`); user gate (handlers skip events of a `deleting` user; API 410); nightly retention (bodies 30/180 days, `ai_calls` 90 days, `audit_log` 1 year, dispatched outbox 7 days, expired idempotency keys; expired `oauth_states` removed on creation); `GET /api/v1/data-summary` | Not written / not run | RT-10, RT-11 |
 
-Exit criteria of slices 1.1–1.5 are **not met**: each requires tests that have not been run.
+Exit criteria of slices 1.1–1.9 are **not met**: each requires tests that have not been run. The Phase 1 exit (real Gmail test account, RT suite, `golden-v1.0`, E1–E4) is not met.
 
 ### 0.1 CI evidence (GitHub Actions)
 
