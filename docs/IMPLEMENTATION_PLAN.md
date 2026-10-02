@@ -298,6 +298,22 @@ Slice 0.3 is **complete** when, in addition, GitHub Actions is green on the slic
 
 ## 3. Phase 1 — Context foundation
 
+### Phase 1 batches (decided 2026-10-02)
+
+Phase 1 is delivered in batches. The §9 order puts 1.3 and 1.4 on top of 1.1 and 1.2, so **Batch A** (the reliability walking skeleton) builds only the **data model** of 1.1 and 1.2 that 1.3 and 1.4 need, and defers their flows to **Batch B**.
+
+| Batch | Slices | Contents |
+|---|---|---|
+| **A** | 1.3 + 1.4, plus the 1.1/1.2 data model | **Identity:** `users` table only. **People:** self Person, `persons`, `person_identifiers`, `organizations`. **Connections:** `connections` and `sync_cursors` tables only, with the provider value `fake`. The identity migration also adds `fk_outbox_user`, `fk_ai_calls_user` and `fk_ai_cost_rollups_user` (`BACKEND_DESIGN.md` §7.3.1, §7.6) and the worker role's users-enumeration read policy (§7.6). Then the 1.3 and 1.4 scope below |
+| **B** | 1.1 + 1.2 flows | OIDC (PKCE, `state`, `nonce`), sessions, CSRF, `audit_log` flows, `DELETE /api/v1/me`, Google connect with incremental scopes, envelope-encrypted refresh tokens, `granted_scopes`, disconnect with revoke, `needs_reauth` |
+
+Batch A rules:
+- **No HTTP endpoint that needs an authenticated user** is added. `GET /api/v1/work-items` (§9) moves to Batch B or D. Tests and evaluation runners read work items through the `work` service. **No development authentication bypass** of any kind.
+- Users and the self Person are created only by service functions (`identity.create_user`, `people.create_self_person`). Tests and the evaluation harness call them in an API-role unit of work for the new user's own ID. Batch B's sign-in callback calls the same functions.
+- The fake mail connector serves `world_v1` mailboxes and evaluation-chain sources. The fake calendar connector implements the calendar protocol and contract tests only. Calendar sync is wired with the `meetings` module in slice 1.6, because no Batch A module normalizes calendar items.
+- Chains with meeting sources (CC-01's and CC-06's transcripts) need the meeting pipeline (AI-10, Phase 4). In Batch A their meeting-dependent checkpoints are reported as blocked, not as passed. CC-37 needs reminders (slice 1.8 or later) and CC-44 is an answer-level (L4) chain, so both are reported with what L2 can and cannot assert.
+- AI-01 runs in the default test run and CI from cassettes only. Without a recording key, cassettes are **placeholders**: hand-authored or label-derived responses marked `"origin": "placeholder"`. They test the deterministic pipeline (apply, mapping, dates, confidence, linking). They are never reported as model quality (E1–E4, A1).
+
 ### Slice 1.1 Identity and sessions
 
 **Depends on:** 0.3 (outbox, worker role). Tests use mocked Google; the external Google Cloud project is needed only for a real sign-in.

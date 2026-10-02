@@ -123,14 +123,16 @@ chat → retrieval → (read) work · people · projects · meetings · communic
 attention → work · communication · meetings · people        (writes priority via their services)
 meetings → intelligence · people · ingestion
 chat · retrieval → intelligence                               (model calls only, through its public API; §5.4)
+work → intelligence · communication · people · projects · ingestion   (email extract orchestration and apply; §5.6)
 communication → people · ingestion
-work → people · projects
 ingestion → connections → identity
+people → identity
+intelligence → platform only                                  (receives input DTOs; never imports a domain module)
 connectors are imported only by ingestion and connections (via the connector registry)
 every module → platform
 ```
 
-Reactions that would create cycles (e.g., `work` changes → `attention` recomputes) go through outbox events.
+Reactions that would create cycles (e.g., `work` changes → `attention` recomputes) go through outbox events. The graph is acyclic: no module imports one that (directly or indirectly) imports it.
 
 ### 5.3 Enforcement
 
@@ -159,6 +161,21 @@ backend/eca/intelligence/output_schemas/<role>.py                               
 | No new boundary type | A top-level `eca.ai` would be either a 15th domain module (splitting AI ownership with no boundary benefit) or a shared layer like `platform` (importable everywhere, so callers could bypass budgets, and a shared layer would write a domain table) |
 
 Consequences: modules that need a model call (`meetings`, `chat`, `retrieval`, and the extraction jobs) use `eca.intelligence`'s public API only. Slice 0.4 adds an import-linter contract so that only `eca.intelligence` imports `google.genai` (a custom `eca_restricted_imports` contract in `eca_devtools`: grimp collapses external packages to their top-level name, `google`, so the contract inspects the import statements; other `google.*` packages stay available to connectors). Prompts, output schemas and cassettes are versioned with the module.
+
+### 5.6 Email extraction orchestration (Batch A decision)
+
+Who does what in the email pipeline, so that the §5.2 rules have no cycle and `intelligence` never reads SOURCE tables (§6.3):
+
+| Step | Module | Reads | Writes |
+|---|---|---|---|
+| Sync (fake connector in Batch A) | `ingestion` (uses `connectors` through the registry, `connections` for the connection and cursor) | Connector DTOs | `source_items` (with the neutral `content` DTO), `sync_cursors`, outbox `SourceItemStored` |
+| Normalize + rules prefilter | `communication` (handler on `SourceItemStored`) | `ingestion.get_source_item` | `messages`, `message_participants`, `conversations`; persons through `people.resolve_*`; stage through `ingestion.set_stage`; outbox `MessageNormalized` |
+| Extract (AI-01) | `work` orchestrates (natural-key handler on `MessageNormalized`, §7.4): it builds the input DTO from `communication.get_message_for_extraction`, `people` (self Person, participants) and its own **candidate list** (§12.1 of `CONTEXT_ARCHITECTURE.md`), then calls `intelligence.extract_email(input)` | DTOs only | Through `intelligence`: `extractions` (`running` → `succeeded`/`failed_*`), `ai_calls`; stage through `ingestion.set_stage`; outbox `ExtractionCompleted` |
+| Apply | `work` (consumption handler on `ExtractionCompleted`) | `intelligence.get_extraction` (stored output + `candidate_map`), `people` (resolve refs), `communication` (message metadata) | `work_items`, `decisions`, `evidence`, `item_evidence`, `context_events`, `entity_mentions` through `people`, `messages.triage` through `communication.set_triage_projection`, stage through `ingestion.set_stage`, `extractions.apply_status` through `intelligence.mark_applied` |
+
+`intelligence.extract_email` receives the message text, participants, candidates and reference time as a DTO built by the caller; it renders the prompt, calls the model **outside any transaction**, validates the output and stores the extraction. It imports no domain module. `work` is the only module that imports `intelligence` for extraction; `communication` and `people` never import `work` or `intelligence`. Import-linter contracts enforce these rules (§5.3).
+
+**Handler resources.** Handlers that need process-level dependencies (the AI client, the connector registry, the clock) receive them from the worker composition through `HandlerContext.resources` (`eca.platform.events.Resources`, a typed lookup). Domain modules never construct the AI client themselves.
 
 ### 5.5 AI runtime configuration, metering and cassettes (slice 0.4 decisions)
 
@@ -243,6 +260,9 @@ Columns `origin ∈ {source, computed, ai, user}` and `verification_status ∈ {
 | **AI-derived state can be reconstructed from source + events** | Projections = fold(events); model events = apply(stored extractions); extractions = AI(source) | RT-14 (rebuild equivalence) |
 | **Every AI-derived item references existing source evidence** | FKs `evidence → source_items`, `item_evidence → evidence`; deletion redacts quotes and flags `has_source_gap` rather than leaving dangling rows | RT-11 |
 | **Model output never sets `lifecycle_status`** | Fold ignores lifecycle changes from `actor ∈ {model, system}` except `cancelled` proposals, which become prompts | Unit tests on fold |
+
+
+**RT-12 mechanism (Batch A).** Extract and apply transactions start with `set_config('eca.code_path', 'extract' | 'apply', true)` (transaction-local, like `app.user_id`; inert in production). In test mode only, a fixture (migration role, never Alembic) installs a trigger function `eca_test_source_guard()` on the SOURCE tables `users`, `connections`, `sync_cursors`, `source_items`, `messages` and `message_participants`. When `eca.code_path` is `extract` or `apply`, it raises on INSERT, DELETE and TRUNCATE, and on UPDATE of any column outside the allowed derived columns: on `source_items` the stage columns (`stage`, `stage_attempts`, `stage_updated_at`, `next_attempt_at`, `last_error_code`, `updated_at`); on `messages` the triage projection (`triage`, `triage_extraction_id`, `updated_at`). Every other column write from those code paths fails the transaction, and RT-12 asserts both that the real pipeline passes and that an injected write is rejected.
 
 ---
 
@@ -353,6 +373,8 @@ The security model is unchanged: the API role stays INSERT-only, and its inserts
 
 Handler idempotency rule: **every handler that writes state inserts `event_consumptions` in the same transaction as its writes; if the insert conflicts, it returns immediately.** Handlers that only enqueue further work rely on natural keys (e.g., `extractions` unique key) instead.
 
+**Handler modes (Batch A).** `consumption` (default): the wrapper above. `natural_key`: for handlers that make an external call (AI, provider API). The wrapper opens no transaction and records no consumption; the handler receives the worker unit-of-work factory and runs its own short transactions around the call, and its idempotency comes from natural keys (`extractions` unique key, `running` row claimed first, stage checks). A duplicate delivery therefore repeats only the cheap checks; the model is called again only when no `succeeded` row exists (bounded by the attempt cap, RT-02b).
+
 Precise duplicate semantics (slice 0.3):
 
 - Procrastinate's `queueing_lock` rejects a second job only while the first is still queued (`todo`). A duplicate deferred while the first job is running is accepted; `lock` (same key) stops the two from running at the same time, and `event_consumptions` makes the later one a no-op.
@@ -378,7 +400,7 @@ indexing runs from `normalized` in parallel and records chunks; it does not chan
 
 Columns on `source_items`: `stage`, `stage_attempts`, `stage_updated_at`, `next_attempt_at`, `last_error_code`.
 
-From slice 1.3 the **reconciler** (every 5 min) also finds source items whose stage has not advanced past its SLA (`fetched` > 5 min, `extract_pending` > 15 min, `extracted` > 5 min) and whose `next_attempt_at` has passed, and re-enqueues the stage job with the same deterministic `queueing_lock`. Outbox re-dispatch of rows `pending` for > 1 minute exists from slice 0.3. All stage jobs are idempotent, so the reconciler can run any time.
+From slice 1.3 the **reconciler** (every 5 min) also finds source items whose stage has not advanced past its SLA (`fetched` > 5 min, `extract_pending` > 15 min, `extracted` > 5 min) and whose `next_attempt_at` has passed, and re-enqueues the stage job with the same deterministic `queueing_lock`. Outbox re-dispatch of rows `pending` for > 1 minute exists from slice 0.3. All stage jobs are idempotent, so the reconciler can run any time. **Mechanism (Batch A):** stage work runs as outbox handlers (normalize on `SourceItemStored`, extract on `MessageNormalized`, apply on `ExtractionCompleted`). Re-dispatching an already consumed event would be a no-op, so the scan instead **publishes a fresh stage event** for each overdue item (`SourceItemStored`, `MessageNormalized` or `ExtractionCompleted`, with `reason = reconcile`) in the user's transaction and sets `next_attempt_at` to now + the stage SLA, so one item is re-published at most once per SLA window. Every stage function is idempotent on the item's current stage, so a re-published event never duplicates work. The per-user scan enumerates users through the worker's users read policy (§7.6) and runs one transaction per user.
 
 ### 7.6 Database roles and access model
 
@@ -448,6 +470,12 @@ No runtime role holds TRUNCATE, REFERENCES or TRIGGER on any table, or UPDATE on
 5. Every table the migrations create in schema `public` is classified as either an infrastructure table listed above or a business table with the `_user_isolation` policy. A new table that is neither fails the test.
 
 Behavioural checks (what each role can actually do) are in RT-15 (§21).
+
+**Batch A tables (identity, people, connections, ingestion, communication, work, intelligence).** Every new table is a user-owned business table with `<table>_user_isolation` for all roles and DML for both runtime roles by default privileges, with these exceptions, which are the only cross-user or reduced grants:
+- **`users`** (keyed by `id`, so its policy compares `id`): the API role keeps DML on its own row. The worker role has **no** table-level privilege except column SELECT on `(id, status, timezone, work_hours)`, and the policy `users_worker_enumerate FOR SELECT TO eca_worker USING (true)`. This is the one cross-user read on a business table (§7.6 "Processing many users safely"): the worker can list user IDs, status and timezone for per-user scans and date resolution, and can read no email, name or other content of any user. The worker needs no INSERT, UPDATE or DELETE on `users` in Batch A (account deletion, slice 1.9, adds what it needs).
+- **`sync_cursors`** gains a `user_id` column (not in the §11.1 DDL), so it is isolated per user like every business table.
+- No other cross-user policy is added. Join tables without their own `user_id` in the abridged DDL (`message_participants`, `item_evidence`) carry `user_id` for RLS.
+The privilege-matrix test classifies every Batch A table as a business table with `_user_isolation`, and checks the `users` exception exactly.
 
 **AI telemetry tables (slice 0.4).** `ai_calls` and `ai_cost_rollups` hold IDs and numbers, never content (§6.2), so they are classified with the delivery infrastructure: isolated per role by grants and role-targeted policies, not business tables under `_user_isolation`.
 - **Writers.** The meter runs in the process that made the call: the API role for interactive calls (it may insert only rows of its own `app.user_id`, without RETURNING, §7.3.3), the worker role for background calls (in the job's user context, or with `user_id` NULL for system calls).
@@ -1287,6 +1315,12 @@ CREATE INDEX ix_chunks_persons ON chunks USING gin (person_ids);
 ```
 
 `outbox`, `event_consumptions` (§7.3), `extractions` (§8.1), `sync_cursors` (§11.1) as defined above. The remaining tables (`users`, `auth_sessions`, `user_preferences`, `user_checkpoints`, `connections`, `conversations`, `message_participants`, `persons`, `person_identifiers`, `organizations`, `entity_mentions`, `meetings`, `meeting_participants`, `recordings`, `transcript_segments`, `projects`, `project_members`, `decisions`, `work_item_owners`, `entity_links`, `chunks`, `reminders`, `notifications`, `briefings`, `feedback_events`, `chat_sessions`, `chat_messages`, `retrieval_traces`, `ai_calls`, `audit_log`, `idempotency_keys`, `export_jobs`, `deletion_jobs`) follow the conventions above; their columns are listed in `TECHNICAL_DESIGN.md` §9 and `CONTEXT_ARCHITECTURE.md` §5. `decisions` mirrors `work_items` for `origin`, `verification_status`, `user_fields`, `version`, `merged_into_id` and the provenance columns.
+
+**Batch A schema decisions (columns not in the abridged DDL above):**
+- `source_items.content jsonb NULL`: the provider-neutral DTO captured at sync (`body_text`, `body_html`, `headers_subset`, `from`, `to`, `cc`, `subject`, `rfc822_id`, `in_reply_to`). It is SOURCE data, so normalize needs no provider call and replay is deterministic; `content_hash` is computed over it. It is purged with the message body under retention (slice 1.9).
+- `sync_cursors.user_id` (RLS, §7.6). `connections.provider` accepts `fake` alongside the real providers.
+- `work_items.project_id` is deferred with the `projects` tables (no FK target in Batch A); `project_hint` is stored. `work_items.notes` (user-authored only) is created; no AI path writes it.
+- `work_items.dedupe_embedding` is created but stays NULL until item embeddings (AI-04) are computed by the extract job in a later batch. Until then matching uses the documented degraded mode (`AI_PIPELINE.md` §14, "Embeddings down → trigram matching"): the model's `candidate_id` first, then deterministic matching on type family, owner, counterparty, due compatibility and normalized-text trigram similarity.
 
 ### 17.3 Index-to-query map
 
