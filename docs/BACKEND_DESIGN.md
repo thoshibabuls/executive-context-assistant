@@ -119,14 +119,22 @@ Media processing (ffmpeg) runs on the `media` queue with concurrency 1 in the sa
 ### 5.2 Dependency rules
 
 ```text
-chat → retrieval → (read) work · people · projects · meetings · communication
+chat → retrieval · intelligence · identity                    (Phase 2: sessions, answers; never imports work or people directly)
+retrieval → work · people · projects · meetings · communication · ingestion · connections · identity · intelligence
+                                                              (read side; writes only its own tables, plus continuation links
+                                                               through work.link_entities and alias mentions through
+                                                               people.replace_alias_mentions — the single writers stay
+                                                               work and people)
+projects → work · people                                      (Phase 2: hint matching reads items and decisions; item
+                                                               assignment and context events through work's services)
 attention → work · communication · meetings · people · identity   (writes priority via their services; user list and timezone)
 privacy → identity · connections · ingestion · communication · meetings · people · work · intelligence
-                                                              (deletion and retention jobs call each module's purge functions;
+          · retrieval · projects · chat                       (deletion and retention jobs call each module's purge functions;
                                                                imported only by eca.api and eca.worker)
 meetings → intelligence · people · ingestion
-chat · retrieval → intelligence                               (model calls only, through its public API; §5.4)
-work → intelligence · communication · people · projects · ingestion   (email extract orchestration and apply; §5.6)
+work → intelligence · communication · people · ingestion      (email extract orchestration and apply; §5.6). Phase 2 removed
+                                                               the earlier "work → projects": work never needed it, and
+                                                               projects → work is the direction hint matching requires
 communication → people · ingestion
 ingestion → connections · identity
 connections → identity                                      (OAuth state and Google ID-token checks for connect)
@@ -136,7 +144,7 @@ connectors are imported only by ingestion and connections (via the connector reg
 every module → platform
 ```
 
-Reactions that would create cycles (e.g., `work` changes → `attention` recomputes) go through outbox events. The graph is acyclic: no module imports one that (directly or indirectly) imports it.
+Reactions that would create cycles (e.g., `work` changes → `attention` recomputes) go through outbox events. The graph is acyclic: no module imports one that (directly or indirectly) imports it. Phase 2 adds import-linter `forbidden` contracts that keep it so: `work`, `people`, `communication`, `meetings`, `ingestion`, `identity`, `connections` and `attention` never import `retrieval`, `projects` or `chat`; `retrieval` and `projects` never import `chat`; `projects` never imports `retrieval`.
 
 ### 5.3 Enforcement
 
@@ -480,6 +488,8 @@ Behavioural checks (what each role can actually do) are in RT-15 (§21).
 - **`sync_cursors`** gains a `user_id` column (not in the §11.1 DDL), so it is isolated per user like every business table.
 - No other cross-user policy is added. Join tables without their own `user_id` in the abridged DDL (`message_participants`, `item_evidence`) carry `user_id` for RLS.
 The privilege-matrix test classifies every Batch A table as a business table with `_user_isolation`, and checks the `users` exception exactly.
+
+**Phase 2 tables (migrations 0011–0017).** `chunks`, `entity_links`, `retrieval_traces`, `user_checkpoints`, `projects`, `project_members`, `chat_sessions` and `chat_messages` are user-owned business tables: ENABLE and FORCE RLS through `eca.platform.rls.user_isolation_ddl`, DML for both runtime roles through the default privileges of `0001`/`0002`, and no exception. The API role reads chunks and writes traces, checkpoints, projects and chat rows in the request's user transaction; the worker role writes chunks, links and project suggestions in the event's user transaction and deletes them in deletion and retention jobs, one user per transaction. No new cross-user policy is added. The API role's existing `ai_cost_rollups_api_read` policy is what the Phase 2 budget check reads (`AI_COST_MODEL.md` §7.1).
 
 **Sign-in and session tables (slices 1.1, 1.2; migration 0009).**
 - `auth_sessions`, `deletion_jobs`: business tables under `_user_isolation`.
@@ -1037,6 +1047,16 @@ Procrastinate is pinned exactly (`procrastinate==3.10.0`, slice 0.3; requires Py
 | `delete_account`, `purge_source` | User request | `delete:{user}` / `purge:{conn}` | Resumable |
 | `cost_rollup` | Every 15 min | `cost_rollup` | Recompute the window (delete, insert) |
 
+**Phase 2 jobs (decided 2026-10-02).**
+
+| Task | Module | Trigger | Mode / lock | Idempotency |
+|---|---|---|---|---|
+| `retrieval.index` | retrieval | `MessageNormalized` (relevant mail only: prefiltered mail never gets the event), `MeetingChanged`; `TranscriptStored` joins in slice 4.2 | `natural_key` handler on queue `embed` (the AI-04 call is outside any transaction). Procrastinate locks are per handler and event, so the write transaction also takes `pg_advisory_xact_lock(hashtextextended('index:' \|\| source_item_id, 0))`: two events for one source item never interleave their writes | Chunks upserted by `(source_item_id, chunk_index)`; surplus chunk indexes deleted; an AI-04 call only for chunks whose `content_hash` or `embedding_model` changed; at most 4 embedding calls per source item version (job attempts ≥ 4 stop calling and leave the chunks FTS-only) |
+| `retrieval.index_removed` | retrieval | `SourceItemDeleted` | consumption | Deletes the source's chunks and alias mentions (§9.3 step 1) |
+| `time_sweep` | work | Hourly (`5 * * * *`, `schedule`) | lock `time_sweep`; one transaction per user | `context_events` dedupe key per item, event type and the hour bucket of the transition (`CONTEXT_ARCHITECTURE.md` §12.7) |
+| `project_suggest` | projects | Nightly (`40 2 * * *`, `schedule`) | lock `project_suggest`; one transaction per user | `UNIQUE (user_id, hint_key)` on suggested projects |
+| `reembed` | retrieval | Operator only (`eca ops reembed --user … [--limit …] [--dry-run]`); never scheduled | — | Chunks whose `embedding_model` differs from the AI-04 model or is NULL; per chunk content hash |
+
 Per-user fairness: at most 4 concurrent `extract` jobs per user (checked at job start against running jobs for that user; excess re-deferred with a short delay), so one large import cannot starve other users.
 
 ---
@@ -1175,6 +1195,22 @@ Why cursor pagination: the collections here (changes, events, needs-response, it
 | POST | `/api/v1/exports` · GET `/api/v1/exports/{export_id}` | Export job |
 
 **Health**: `GET /healthz`, `GET /readyz` (API process: database reachable, schema at head). The worker has no HTTP server and no health or readiness check in slice 0.3. In 0.3, dispatch progress is observed through the oldest-pending age and `failed` count that the reconciler logs (§7.5, §19). A worker liveness or readiness signal (for example a dispatcher heartbeat) is designed together with the hosting decision (Q1), because its form depends on the platform's probes. It is not part of slice 0.3. Procrastinate's internal worker heartbeat (§14.3) is a different thing: it serves stalled-job recovery only.
+
+### 16.7 Phase 2 route details (decided 2026-10-02)
+
+| Route | Detail |
+|---|---|
+| `GET /api/v1/changes?since=&scope=&cursor=&limit=` | `scope` = `today` (default), `person:<id>` or `project:<id>`. Anchor: `since` if given, else the checkpoint of the scope's surface; no checkpoint or one older than 14 days → the last 7 days, with `anchor.note`. Body: `anchor {at, basis, note}`, `coverage`, `items` (net changes, each with `group`, `entity_type`, `entity_id`, `materiality`, `before`, `after`, `evidence` source IDs, provenance labels) ordered by materiality × priority, keyset `next_cursor`. Reading never moves the checkpoint |
+| `PUT /api/v1/checkpoints/{surface}` | Body `{last_seen_at?}` (default now). Surfaces `today`, `chat`, `person:<id>`, `project:<id>`, `meeting:<id>`. The later timestamp wins (§6.2). 204 |
+| `GET /api/v1/days/{date}` | `date` is a local calendar date (`YYYY-MM-DD`) in the user's timezone. Body: window, meetings held, conversations with activity (by priority), items created or changed (materiality ≥ 2, events learned that day flagged `learned_today`), decisions, reply-state changes, coverage. Deterministic, no AI call |
+| `GET /api/v1/projects?verification=&cursor=` · `POST /api/v1/projects` | Create = user project (`origin = user`, `verification_status = user_created`), `Idempotency-Key`, 201 |
+| `GET /api/v1/projects/{id}` · `PATCH` | Project context (card, members, open items, decisions, changes of 14 days, linked threads; `activity_status` quiet after 30 days); PATCH name, description, aliases, importance with `If-Match` |
+| `POST /api/v1/projects/{id}/confirm` · `/reject` · `/items` | Confirm or reject a suggestion (authority 5, `feedback_events`, `context_events` actor user); assign a work item (`{item_id}`, a user event on the item's `project_id`) |
+| `GET /api/v1/topics?q=` | Topic mode (`CONTEXT_ARCHITECTURE.md` §10.3): up to 3 groups by thread or meeting, each labelled "grouped by topic; not a confirmed project" |
+| `POST /api/v1/chat/sessions` | `{scope?}`: `{"kind": "global"}` (default) or `{"kind": "meeting", "meeting_id": …}`. 201 |
+| `GET /api/v1/chat/sessions?cursor=` · `GET /api/v1/chat/sessions/{id}` · `DELETE` | History (messages with claims, citation snapshots and provenance); DELETE is permanent (204) |
+| `POST /api/v1/chat/sessions/{id}/messages` | Body `{text}` (1–2,000 characters). **`Idempotency-Key` required.** Rate limit 20/min per user (429 + `Retry-After`). Response `text/event-stream`; events in order: `plan` `{scenario, tier, planner}`, `sources` `{citations}`, `delta` `{text}` (the verified answer, after the grounding checks), `final` `{message}`, or `error` `{code, title}`. A replayed key whose answer is stored returns the same `final` message with `Idempotent-Replay: true`; a key still in progress is 409; a failed run releases its key so the client can retry |
+| `POST /api/v1/chat/messages/{id}/feedback` | `{rating: helpful \| not_helpful, reason?}` → `feedback_events`, 204 |
 
 ### 16.6 Inbound rate limits
 
@@ -1352,6 +1388,113 @@ CREATE INDEX ix_chunks_persons ON chunks USING gin (person_ids);
 ### 17.4 Growth and migrations
 
 Partition `chunks`, `messages`, `context_events` by `HASH(user_id)` when any exceeds ~20 M rows (queries already lead with `user_id`). Alembic sequential revisions, one concern each, expand-then-contract, `CREATE INDEX CONCURRENTLY` on large tables, run only in the release step.
+
+### 17.5 Phase 2 schema (decided 2026-10-02)
+
+One revision per concern; every table below gets ENABLE + FORCE RLS through `user_isolation_ddl` and the default DML grants (§7.6, "Phase 2 tables").
+
+| Revision | Slice | Objects |
+|---|---|---|
+| `0011_chunks` | 2.1 | `chunks` |
+| `0012_entity_links` | 2.1 | `entity_links` |
+| `0013_retrieval_traces` | 2.2 | `retrieval_traces` |
+| `0014_user_checkpoints` | 2.3 | `user_checkpoints` |
+| `0015_projects` | 2.5 | `projects`, `project_members`; expand: nullable `work_items.project_id` and `decisions.project_id` with FKs to `projects` |
+| `0016_project_indexes` | 2.5 | `ix_wi_project`, `ix_decisions_project`, `ix_decisions_hint_trgm`, created `CONCURRENTLY` (existing tables) outside the revision transaction |
+| `0017_chat` | 2.4 | `chat_sessions`, `chat_messages` |
+
+```sql
+CREATE TABLE chunks (
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id),
+  source_item_id uuid NOT NULL REFERENCES source_items(id), chunk_index int NOT NULL,
+  kind text NOT NULL CHECK (kind IN ('email','calendar_event','transcript','summary')),
+  title text NULL,                       -- subject or meeting title (A-weighted in tsv)
+  text text NOT NULL, token_count int NOT NULL,
+  content_hash bytea NOT NULL,           -- sha256 of the AI-04 document input (embed/v1 format)
+  occurred_at timestamptz NOT NULL,
+  conversation_id uuid NULL REFERENCES conversations(id), meeting_id uuid NULL REFERENCES meetings(id),
+  person_ids uuid[] NOT NULL DEFAULT '{}',
+  embedding halfvec(768) NULL, embedding_model text NULL, embedded_at timestamptz NULL,
+  tsv tsvector GENERATED ALWAYS AS (setweight(to_tsvector('english', coalesce(title, '')), 'A')
+                                    || setweight(to_tsvector('english', text), 'B')) STORED,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK ((embedding IS NULL) = (embedding_model IS NULL)));
+CREATE UNIQUE INDEX ux_chunks ON chunks (source_item_id, chunk_index);
+CREATE INDEX ix_chunks_hnsw ON chunks USING hnsw (embedding halfvec_cosine_ops);
+CREATE INDEX ix_chunks_fts ON chunks USING gin (tsv);
+CREATE INDEX ix_chunks_user_time ON chunks (user_id, occurred_at DESC);
+CREATE INDEX ix_chunks_persons ON chunks USING gin (person_ids);
+CREATE INDEX ix_chunks_conversation ON chunks (user_id, conversation_id) WHERE conversation_id IS NOT NULL;
+
+CREATE TABLE entity_links (
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id),
+  from_type text NOT NULL, from_id uuid NOT NULL, to_type text NOT NULL, to_id uuid NOT NULL,
+                                         -- types: work_item | decision | conversation | meeting | project
+  relation text NOT NULL CHECK (relation IN ('continues','possible_duplicate','relates_to')),
+  confidence real NOT NULL, method text NOT NULL CHECK (method IN ('deterministic','embedding_match','llm','user')),
+  origin text NOT NULL CHECK (origin IN ('computed','ai','user')),
+  verification_status text NOT NULL DEFAULT 'suggested' CHECK (verification_status IN ('suggested','confirmed','rejected')),
+  scores jsonb NOT NULL DEFAULT '{}',    -- the numbers that produced a computed link; never content
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, from_type, from_id, to_type, to_id, relation));
+CREATE INDEX ix_entity_links_to ON entity_links (user_id, to_type, to_id, relation);
+
+CREATE TABLE retrieval_traces (          -- content-free: IDs, scores, counts, timings
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id),
+  query_hash bytea NOT NULL,             -- sha256 of the question; the text lives only in chat_messages
+  surface text NOT NULL CHECK (surface IN ('chat','api','eval')),
+  scenario text NOT NULL, planner text NOT NULL CHECK (planner IN ('rules','ai','fallback','fixed')),
+  plan jsonb NOT NULL, candidates jsonb NOT NULL, selected jsonb NOT NULL, coverage jsonb NOT NULL,
+  context_tokens int NOT NULL, budget_tokens int NULL, latency_ms int NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX ix_retrieval_traces_user_time ON retrieval_traces (user_id, created_at DESC);
+
+CREATE TABLE user_checkpoints (
+  user_id uuid NOT NULL REFERENCES users(id),
+  surface text NOT NULL CHECK (surface ~ '^(today|chat|(person|project|meeting):[0-9a-f-]{36})$'),
+  last_seen_at timestamptz NOT NULL, updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, surface));
+
+CREATE TABLE projects (
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id),
+  name text NOT NULL, description text NULL, aliases text[] NOT NULL DEFAULT '{}',
+  hint_key text NULL,                    -- normalized project_hint a suggestion came from
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
+  importance_user smallint NULL,
+  origin text NOT NULL CHECK (origin IN ('ai','user')),
+  verification_status text NOT NULL CHECK (verification_status IN ('suggested','confirmed','rejected','user_created')),
+  suggestion_sources int NULL,           -- distinct sources that shared the hint (computed)
+  user_fields text[] NOT NULL DEFAULT '{}', version int NOT NULL DEFAULT 1,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), deleted_at timestamptz NULL);
+CREATE UNIQUE INDEX ux_projects_hint ON projects (user_id, hint_key) WHERE hint_key IS NOT NULL;
+CREATE INDEX ix_projects_name_trgm ON projects USING gin (lower(name) gin_trgm_ops) WHERE deleted_at IS NULL;
+CREATE TABLE project_members (
+  project_id uuid NOT NULL REFERENCES projects(id), person_id uuid NOT NULL REFERENCES persons(id),
+  user_id uuid NOT NULL REFERENCES users(id), role text NULL,
+  origin text NOT NULL CHECK (origin IN ('computed','user')), PRIMARY KEY (project_id, person_id));
+
+CREATE TABLE chat_sessions (
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), title text NULL,
+  scope jsonb NOT NULL DEFAULT '{"kind": "global"}',
+  session_entities jsonb NOT NULL DEFAULT '[]',   -- entity focus map (CONTEXT_ARCHITECTURE.md §13)
+  version int NOT NULL DEFAULT 1,
+  created_at timestamptz NOT NULL DEFAULT now(), last_active_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE chat_messages (
+  id uuid PRIMARY KEY, session_id uuid NOT NULL REFERENCES chat_sessions(id), user_id uuid NOT NULL REFERENCES users(id),
+  role text NOT NULL CHECK (role IN ('user','assistant')), content text NOT NULL,
+  reply_to_id uuid NULL REFERENCES chat_messages(id),
+  scenario text NULL, answer_tier text NULL CHECK (answer_tier IN ('deterministic','T1','T2','abstain','degraded')),
+  claims jsonb NOT NULL DEFAULT '[]', citations jsonb NOT NULL DEFAULT '[]',   -- snapshots: text + source references
+  confidence text NULL CHECK (confidence IN ('low','medium','high')), provenance jsonb NULL,
+  retrieval_trace_id uuid NULL,          -- no FK: traces expire after 90 days (§6.2)
+  ai_call_ids uuid[] NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX ix_chat_messages_session ON chat_messages (session_id, created_at, id);
+CREATE INDEX ix_chat_sessions_user ON chat_sessions (user_id, last_active_at DESC, id);
+```
+
+Not built in Phase 2: `chunks.project_id` (TECHNICAL_DESIGN.md §9.1) — project retrieval reaches chunks through the project's linked items, decisions and conversations, so the column would stay empty; `chat_sessions.session_summary` (AI-13 retired).
+
+Deletion order additions (§13.3): account deletion runs `chat` → `retrieval` (chunks, traces) → `work` (now also `entity_links`) → … → `projects` (members, projects; after `work`, whose rows reference them) → `people` …; `identity.purge_sessions` also removes `user_checkpoints`. Source purge deletes the batch's chunks first (they reference source items, conversations and meetings) and the `continues` links of purged conversations. Provider deletion of one message deletes its chunks (`retrieval.index_removed`). Retention deletes the chunks of messages whose body was purged, and `retrieval_traces` older than 90 days.
 
 ---
 

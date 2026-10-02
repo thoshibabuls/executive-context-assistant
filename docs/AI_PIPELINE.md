@@ -265,6 +265,24 @@ Answer schema (AI-06, AI-07; AI-08 adds `context`, `previous_agreement`, `curren
 - **Pre-check (no model call):** if the plan's anchor cannot be resolved, or retrieval returns no structured match and no chunk above the minimum fused score, the system returns: "The available context does not establish this." plus coverage (sources searched, windows, sync times) and the closest related items if any.
 - **Model-level:** the model sets `answerable = false` when the packet does not support an answer; the same template is rendered with `missing_info`.
 
+### 5.8 Phase 2 implementation details (decided 2026-10-02)
+
+**AI-05 `plan_query` output (`plan_query.v1`).** `{intent, person_names[≤ 3], topic (≤ 120 chars) | null, time_expression, since_date | null, needs_clarification, confidence}`. `intent` is one of the code-defined retrievers: `waiting_for`, `promised`, `who_waiting_on_me`, `needs_response`, `overdue`, `deadlines`, `person`, `topic_status`, `project`, `day_view`, `what_changed`, `next_action`, `email_context`, `unsupported`. `time_expression` is one of `today`, `yesterday`, `this_week`, `last_week`, `recently`, `since_last_meeting`, `since_date` or null. Rules run first (keyword and pattern rules, alias lookup for names); AI-05 runs only when no rule decides the intent. Its output only selects a retriever and its parameters; it never produces SQL. If AI-05 is unavailable, the question is routed to `topic_status` with the whole question as the topic (planner `fallback`).
+
+**Routing (default until experiment X6).** Deterministic rendering, no AI call: `waiting_for` (S7), `promised` (S8), `needs_response` (S9), `who_waiting_on_me`, `overdue`, `deadlines`, `day_view` (S10), `email_context` (S1 panel). AI-06 (T1): `person` (S2), and list intents that carry a topic qualifier the templates cannot express ("What did I promise about the budget?"). AI-07 (T2): `topic_status` (S6), `project` (S3), `what_changed` (S11), `next_action` (S12). AI-06 escalates once to AI-07 when no `source` or `user` claim survives the grounding checks and `missing_info` is set. The extra retrieval round of §6.4 is not built in Phase 2.
+
+**AI-06 / AI-07 output (`answer.v1`).** The §5.7 schema: `answer_markdown` ≤ 4,000 characters, at most 20 claims of ≤ 400 characters, citations matching `S<n>` or `COVERAGE`.
+
+**Grounding checks (§5.7), exact rules.**
+- Rule 2 compares normalized tokens: lower case; month and weekday names reduced to their first three letters; ordinal suffixes removed (`8th` → `8`); numbers without leading zeros. Checked tokens of a `source` claim: every number, month, weekday and capitalized word that is not a common function word. Packet cards render dates as `Thu 8 Oct 2026` (plus time and zone for datetimes), so a claim's date can be matched. A claim with any unmatched token is relabelled `inference` and flagged.
+- The displayed answer is rendered from the verified claims (one sentence per claim, labelled by kind, with its citation chips); the model's `answer_markdown` is not shown, so a relabelled claim can never appear as fact.
+- Absence claims without `COVERAGE` get the coverage citation and the coverage sentence appended.
+- Abstention template: "The available context does not establish this." + the coverage sentence + up to 3 closest related items. Degraded template (model unavailable, budget cap): "A written answer is not available right now." + the deterministic list of retrieved items with citations.
+
+**Claim kinds of deterministic answers.** An item that is user-created, confirmed or has user-set fields → `user`; an AI-derived item with `commitment_strength = explicit` → `source`; other AI-derived items → `inference` (rendered "possible" when the confidence band is low); a computed reply state ("awaiting your reply") → `source` citing the conversation card.
+
+**Answer provenance.** `chat_messages.provenance` stores `{source: [source refs of cited items], confidence_band, derived_at, extraction_method: llm | deterministic, model, prompt_version, ai_call_ids, evidence: [evidence IDs]}`. Answers report a band, not a number, so the `Provenance` model of §5.1 (numeric confidence) is not used for answers.
+
 ---
 
 ## 6. Pipelines
@@ -390,6 +408,7 @@ Because statements (not final types) are stored, changes to the §5.5 mapping ar
 - Order: stable instructions and schema → user card → candidates or packet → delimited untrusted content → question.
 - Untrusted content is declared as data; no side-effecting tools (`TECHNICAL_DESIGN.md` §17.6).
 - Up to 3 of the user's recent rejections from the same sender as negative examples in AI-01 (deterministic selection). Few-shot examples come only from the `dev` split.
+- Phase 2 prompts and schemas: `plan_query/v1.md` with `output_schemas/plan_query.py` (`plan_query.v1`); `answer_lookup/v1.md` with `output_schemas/answer_lookup.py` and `answer_synthesis/v1.md` with `output_schemas/answer_synthesis.py` (both `answer.v1`). AI-04 has no prompt file; its input format is the version string `embed/v1` (`CONTEXT_ARCHITECTURE.md` §9.10). Interactive calls (AI-05, AI-06, AI-07) follow the interactive attempt policy of §7: primary, one retry, one fallback call, then degradation.
 
 ---
 

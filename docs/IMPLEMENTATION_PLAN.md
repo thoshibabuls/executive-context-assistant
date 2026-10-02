@@ -1,6 +1,6 @@
 # Implementation Plan — Executive Context Assistant
 
-**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete)
+**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete). Phase 1: code written, untested (§0.5). Phase 2: in progress — coding only; tests deferred (§0.6)
 **Date:** 2026-10-02
 **Authority:** Execution order, slices, deliverables and exit criteria. Architecture is defined in `TECHNICAL_DESIGN.md` and the documents in its §5.1; this plan must not introduce behaviour or architecture that those documents do not describe (`CLAUDE.md`: "If implementation requires changing product behavior, stop and update the appropriate document first").
 
@@ -35,6 +35,29 @@ At the owner's instruction ("code only, no tests"), slices 1.1–1.9 were writte
 | 1.9 Deletion and retention | Provider deletion (`SourceItemDeleted`: bodies purged, evidence quotes redacted, items archived or `has_source_gap`, meetings cancelled); source purge on disconnect (`?purge=true`, batched, tombstones where redacted evidence of user-touched items remains); account deletion job (ordered, resumable, progress in `deletion_jobs`; tokens revoked; `ai_calls.user_id` → NULL; roll-ups folded into NULL-user rows; event consumptions and outbox; the user's audit rows replaced by one content-free record; user row deleted under `users_worker_delete`); user gate (handlers skip events of a `deleting` user; API 410); nightly retention (bodies 30/180 days, `ai_calls` 90 days, `audit_log` 1 year, dispatched outbox 7 days, expired idempotency keys; expired `oauth_states` removed on creation); `GET /api/v1/data-summary` | Not written / not run | RT-10, RT-11 |
 
 Exit criteria of slices 1.1–1.9 are **not met**: each requires tests that have not been run. The Phase 1 exit (real Gmail test account, RT suite, `golden-v1.0`, E1–E4) is not met.
+
+### 0.6 Phase 2 code status — in progress, coding only; tests deferred
+
+At the owner's instruction ("Phase 2 — coding only; testing is deferred to a later task"), slices 2.1–2.5 are written in the order 2.1 → 2.2 → 2.3 → 2.5 → 2.4 without writing or running any test. Static checks (ruff, ruff format, mypy strict, lint-imports) run through the pre-commit hooks on every commit. No live Gemini call is made; experiments X6 and X7 are not run. Phase 2 is **not complete** until the deferred tests below and the Phase 2 exit criteria (§4) pass.
+
+Phase 2 builds on the Phase 1 code of §0.5, which is itself untested. Phase 2 code that depends on Phase 1 behaviour (apply, normalization, sessions, CSRF, the worker) inherits that risk.
+
+**Deferred tests** (from the Tests column of §4; none written or run in this task):
+
+| Slice | Deferred tests |
+|---|---|
+| 2.1 Indexing | Index idempotency (re-index of unchanged content makes no AI call and writes no new rows; replay and duplicate events converge); mention accuracy (alias-scan and extraction mentions against labelled mentions) |
+| 2.2 Retrieval | L3 suites (`CONTEXT_EVALUATION.md` §3, §8.2: chain recall, Recall@K, NDCG@10, context precision, useful-token ratio, anchor and temporal-window accuracy); E6 (`AI_EVALUATION.md` §4.6) |
+| 2.3 Change feed and day view | CC-23, CC-24, CC-25, CC-26 |
+| 2.4 Chat | E7, E8, E10, E15, E16; L4/L5; SS session scripts |
+| 2.5 Projects | CC-21, CC-22 |
+| Phase 2 exit | G3/G4 thresholds on S1–S3 and S6–S12 (`CONTEXT_EVALUATION.md` §14); retrieval-method ablation R1–R5 run once and recorded (§10) |
+
+Also deferred: unit tests of the pure functions added in Phase 2 (chunking, token estimate, alias scan, continuation scoring, temporal resolver, RRF and §9.2 ranking, packet layout and budgets, coverage rendering, net-change fold, planner rules, grounding checks), integration tests of the new migrations (0011–0017: up/down/up, privilege matrix, RLS fail-closed on every new table, RT-15 extension), API tests of the new routes (SSE events, `Idempotency-Key` replay, rate limit, 404 on other users' IDs) and the deletion paths that now include chunks, traces, links, checkpoints, projects and chat (RT-10, RT-11 extensions).
+
+**Experiments deferred:** X6 (chat routing per intent) and X7 (is the planner needed?) are not run in this task. The code implements the default routes of `AI_PIPELINE.md` §4 and §8.2; X6 and X7 decide them on the frozen dataset later.
+
+**Phase 2 decisions recorded in the authoritative documents before coding:** module dependencies and the import-linter contracts (`BACKEND_DESIGN.md` §5.2), RLS and roles of every new table (§7.6), Phase 2 schema and migrations (§17.5), jobs (§15), API details (§16.7); chunking, search, ranking, coverage, scope and packet parameters (`CONTEXT_ARCHITECTURE.md` §9.10); thread continuation and time-sweep parameters (§12.7); session context (§13); AI-04/05/06/07 prompts, schemas and grounding details (`AI_PIPELINE.md` §5.8, §11); Phase 2 budget guardrails (`AI_COST_MODEL.md` §7.1).
 
 ### 0.1 CI evidence (GitHub Actions)
 
@@ -404,6 +427,15 @@ Provider deletion flow (§9.3), source purge on disconnect, account deletion job
 | 2.5 Projects | Hint matching, topic mode (S3), project suggestions and confirmation | CC-21, CC-22 |
 
 **Phase 2 exit:** PRD §57 items 12–13; `CONTEXT_EVALUATION.md` G3/G4 thresholds on S1–S3 and S6–S12; ablation R1–R5 run once and recorded (validates the no-graph decision).
+
+**Status:** in progress — coding only; tests deferred (§0.6). Build order 2.1 → 2.2 → 2.3 → 2.5 → 2.4, because chat (2.4) consumes the retrievers, the change feed and topic mode.
+
+**Phase 2 scope notes (decided 2026-10-02):**
+- Transcripts do not exist before Phase 4. The index job subscribes to `MessageNormalized` and `MeetingChanged`; the `TranscriptStored` trigger and the transcript window chunker are added with the meeting pipeline (slice 4.2). S4 and S5 (meeting prep and cross-meeting reasoning) stay in Phase 4.
+- Work-item and decision cards are not embedded in Phase 2: their discovery uses SQL full-text search over the rendered title or statement plus the evidence pivot from matched chunks (`CONTEXT_ARCHITECTURE.md` §9.10). Item embeddings arrive with `dedupe_embedding`.
+- Thread and meeting summaries (AI-03, AI-10) do not exist yet, so no summary chunks are indexed.
+- Per-user daily budget caps are enforced for chat and indexing only (`AI_COST_MODEL.md` §7.1); the full guardrail set (global budget, alerts, fitted per-user learning bounds) stays in slice 3.5.
+- The minimal web chat page is in scope because PRD §57 items 12–13 require that a test user can ask contextual questions and see source-grounded answers.
 
 ---
 

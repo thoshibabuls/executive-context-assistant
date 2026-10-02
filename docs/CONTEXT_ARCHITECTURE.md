@@ -466,6 +466,32 @@ No raw thread, transcript or history beyond those quotes is sent. If the plan ca
 
 Prefiltered bulk mail is not chunked or embedded. Hybrid search runs one SQL statement: top 40 by HNSW cosine on `chunks.embedding` and top 40 by `ts_rank_cd` on `chunks.tsv`, both filtered by the §9.7 scope and the plan's time/person/meeting filters, fused with Reciprocal Rank Fusion (`Σ 1/(60 + rank)`), then ranked by §9.2. pgvector `hnsw.iterative_scan = relaxed_order` prevents per-user filters from starving results. Query embeddings use `gemini-embedding-2` (768 dimensions, normalized) with the retrieval instruction in the input text. No reranker in the MVP.
 
+### 9.10 Phase 2 implementation parameters (decided 2026-10-02)
+
+Values the sections above leave open, fixed before coding. Changing any of them is a major change (`AI_PIPELINE.md` §12).
+
+| Topic | Decision |
+|---|---|
+| Token estimate | ⌈characters / 4⌉, deterministic, no tokenizer call. Used for chunk sizes, packet budgets and `retrieval_traces.context_tokens` |
+| Email chunks | Text = the message's `body_clean` (quoted history and signatures already removed by normalization). One chunk when ≤ 1,200 tokens; otherwise paragraphs (blank-line separated) packed greedily up to 1,200 tokens; a paragraph above 1,200 is split at sentence ends, then at whitespace; a last piece under 50 tokens is merged into the previous chunk. An empty body indexes the subject alone; no subject and no body → no chunk. `title` = subject. `person_ids` = sender, To and Cc persons |
+| Calendar chunks | One chunk: description (if any) and an `Attendees:` line with display names; `title` = meeting title. Cancelled meetings have no chunks |
+| Not chunked | Prefiltered mail (no `MessageNormalized`), duplicate RFC 822 copies (they stop at `normalized`), trashed or deleted sources (removed or excluded at query time) |
+| AI-04 input (`embed/v1`) | Document: `title: {title or "none"} \| text: {text}`; query: `task: search result \| query: {question}`. The format string is part of the cassette key. Vectors are L2-normalized in code before storage (768 dimensions). `chunks.content_hash` = SHA-256 of the document input, so unchanged text is never re-embedded |
+| FTS | Configuration `english`; `tsv` = A-weighted title + B-weighted text. Query = OR of the question's topic terms (alphanumeric tokens of ≥ 2 characters, at most 12) through `to_tsquery('english', 't1 \| t2 …')`; rank `ts_rank_cd(tsv, query, 32)` |
+| Vector search | `SET LOCAL hnsw.iterative_scan = relaxed_order` and `SET LOCAL hnsw.ef_search = 100` in the query transaction; only rows with `embedding_model` = the current AI-04 model; top 40 by cosine distance |
+| Fusion | RRF with k = 60 over the two top-40 lists; the 20 best chunks go on to ranking; per-conversation cap of 3 chunks applies to discovery only (A14) |
+| Match floor (abstention pre-check) | A chunk counts as a match only if it is in the FTS list or its cosine similarity is ≥ 0.60 |
+| Item and decision discovery | No item or decision embeddings in Phase 2 (they arrive with `dedupe_embedding`). Discovery uses SQL full-text search over the rendered title or statement, computed in the query over the user's rows, plus the pivot from matched chunks to items through `evidence.source_item_id` |
+| Ranking weights (§9.2) | Authority: user-created or user-edited 1.4, confirmed 1.3, explicit (strength) 1.1, other AI-derived 1.0, summary 0.8. Materiality (events only): 0 → 0.5, 1 → 0.8, 2 → 1.0, 3 → 1.2. Anchor match: the row references a resolved anchor person, conversation, project or item |
+| Budget enforcement (§9.6) | Frame, coverage and question are always packed. Anchors and their timelines (chain completeness) may use up to the hard cap. Every other section is packed only while the packet stays within the dynamic budget; an item that does not fit is skipped, never cut. Deterministic scenarios (S7–S9, overdue, deadlines) have no token budget and list at most 50 items |
+| Session block | The last 4 turns, each cut to its first 300 tokens, at most 1,500 tokens in total; older turns go first |
+| Coverage | Sources: email (connections with the mail capability, resource `mail`) and calendar (resource `calendar`). Last success = `sync_cursors.last_success_at`. A source is **stale** when its last success is older than 1 h during the user's work hours (Monday–Friday 09:00–18:00 local unless `users.work_hours` says otherwise) or older than 24 h at any time. Gaps: not connected, `needs_reauth`, `error`, `paused`, disconnected with kept data, calendar scope missing, stale. The block is rendered by a deterministic template |
+| Source authorization (§9.7) | A purge deletes data, so it is never retrieved. A connection disconnected without purge ("keep data") stays retrievable and is reported as a gap. `calendar_event` sources are excluded when their connection no longer holds the calendar capability. Trashed and deleted source items are excluded from chunk search, and evidence quotes whose source is trashed or deleted are not packed |
+| Meeting session scope | Allowed sources: the meeting's source item plus up to 2 prior meetings (same `series_key`, else ≥ 50% participant overlap within 60 days); items and decisions qualify when their evidence comes from those sources |
+| Citations | Packed items get `S1`…`Sn` in layout order; the coverage block is cited as `COVERAGE` |
+| Untrusted text | Every quote, chunk, subject and name in a packet is delimited by `<<<` and `>>>`; occurrences of those markers inside content are replaced by `‹‹‹` and `›››`. User notes are never packed (`AI_PIPELINE.md` §15) |
+| Traces | One `retrieval_traces` row per assembly, content-free: plan, candidate and selected IDs with scores, coverage statuses and times, token counts, latency; the question only as a SHA-256 hash |
+
 ---
 
 ## 10. Retrieval design per scenario
@@ -841,6 +867,15 @@ The hourly sweeper writes `became_overdue`, `due_soon`, `became_stale` events (`
 
 Every write described in this section happens inside the apply transaction or an outbox-driven handler transaction defined in `BACKEND_DESIGN.md` §7–§9; no context state is written outside those paths.
 
+
+### 12.7 Phase 2 parameters for linking and time events (decided 2026-10-02)
+
+| Rule | Decision |
+|---|---|
+| Thread continuation (§12.2, A7) | Computed by the index job for the first indexed message of a conversation. Candidates: other conversations with chunks in the 30 days before the message whose participant overlap \|A ∩ B\| / min(\|A\|, \|B\|), over `person_ids` without the user, is ≥ 0.5. A link is written to the best candidate when the subject trigram similarity (after removing `Re:`/`Fwd:` prefixes) is ≥ 0.5 or the cosine similarity of the two first chunks is ≥ 0.80. `confidence` = the higher of the two scores; one link per new conversation; `relation = continues`, `origin = computed`, method `deterministic` (subject) or `embedding_match` (body) |
+| Alias scan (`entity_mentions`, A4) | Person name aliases of ≥ 2 words and ≥ 5 characters, and names and aliases of confirmed projects of ≥ 4 characters, are matched as whole-word, case-insensitive phrases in each chunk's text; the self Person is excluded. Confidence 0.9 (persons) and 0.8 (projects); `method = alias_match`; the source's alias mentions are replaced on every re-index. Extraction mentions (AI-01 `mentions`, resolved within participants) are written by apply as before |
+| Time sweep (§12.4) | Hourly, per user. `became_overdue`: open item with a non-fuzzy `due_at` ≤ now. `due_soon`: `due_at` in (now, now + 24 h]. `became_stale`: open item whose `last_activity_at` is older than 7 days, or a `waiting_for`/`delegated` item past due with no event for 5 working days; it also sets the projection column `stale`, which the sweep clears once activity resumes. Dedupe key: SHA-256 of (`time`, item, event type, the UTC hour bucket of the transition time: `due_at` for overdue, `due_at` − 24 h for due soon, the moment the stale policy was crossed for stale), so a rerun or a late sweep writes each transition once. `actor = time`, authority 1, materiality 2, `occurred_at` = the transition time. Time events set no field and do not count as activity: the status fold (§8) ignores them for `last_activity_at` |
+
 ---
 
 ## 13. Session context
@@ -853,6 +888,8 @@ Every write described in this section happens inside the apply transaction or an
 | Scope | Global or meeting-scoped; a meeting scope allows prior meetings found by §10.4 step 3 |
 | Reuse | None in the MVP; each turn assembles a fresh packet (packet reuse removed in the complexity audit) |
 | Expiry | Session focus resets after 2 h of inactivity; summary kept for history |
+| Focus map content (Phase 2) | `chat_sessions.session_entities`: at most 10 entries `{type, id, label, turn}`, newest first, from each turn's resolved anchors and the entities its answer cited. "he/him/his/she/her/they/them" resolve to the newest person; "it/that/this" to the newest item, decision, project or conversation. The map is updated in the transaction that stores the answer |
+| Change anchor in chat | "What changed?" without a time anchors at the `chat` checkpoint, else the `today` checkpoint (§7.1 rules for old checkpoints); the `chat` checkpoint moves to the answer time once the answer is stored |
 
 ---
 

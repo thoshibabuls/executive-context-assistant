@@ -140,6 +140,15 @@ Batch import is deferred because the saving does not justify a submission ledger
 | Global daily budget | Per environment | Alert at 70%; stop background AI at 100% |
 | Evaluation budget | $200 / month default | Live runs queued or approved |
 
+### 7.1 Phase 2 enforcement (decided 2026-10-02)
+
+Phase 2 enforces the two per-user daily caps above for chat and indexing; the rest of the table (global budget, alerts, evaluation budget) stays with slice 3.5.
+
+- **Spend** = the sum of `est_cost_usd` in the user's `ai_cost_rollups` buckets since 00:00 UTC of the current day. Roll-ups lag by up to 15 minutes, so the check can let a few calls through after a cap is crossed; this is accepted at pilot scale.
+- **Soft cap ($1.00):** AI-07 is replaced by the deterministic structured answer, plus AI-06 where the intent allows, with a notice. AI-05 still runs.
+- **Hard cap ($2.50):** chat answers deterministic intents only (no AI-05, AI-06 or AI-07; non-list questions get the degraded template with a notice); the index job stores chunks without embeddings (FTS-only), which the operator `reembed` path fills later. Extraction is not changed in Phase 2.
+- The cap values are code constants in `eca.intelligence`; changing them is a major change (§9).
+
 ---
 
 ## 8. Telemetry
