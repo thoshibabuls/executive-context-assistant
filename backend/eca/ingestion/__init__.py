@@ -16,6 +16,7 @@ from eca.ingestion.events import (
     SourceItemStored,
     SyncRequested,
 )
+from eca.ingestion.registry import build_connector_registry
 from eca.ingestion.service import (
     MAIL_RESOURCE,
     SourceItem,
@@ -48,6 +49,7 @@ __all__ = [
     "SourceItemStored",
     "SyncReport",
     "SyncRequested",
+    "build_connector_registry",
     "check_transition",
     "get_source_item",
     "items_in_stage",

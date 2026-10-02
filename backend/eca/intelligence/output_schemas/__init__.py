@@ -1,5 +1,13 @@
-"""Structured-output schemas, one module per role: ``output_schemas/<role>.py`` (AI_PIPELINE.md §11).
+"""Pydantic output schemas per AI role (AI_PIPELINE.md §11)."""
 
-Each schema is a Pydantic model; its JSON schema is sent with the request and the response is
-validated against it. Slice 0.4 adds the layout only; the first schema (AI-01) arrives in 1.4.
-"""
+from eca.intelligence.output_schemas.adjudicate import Adjudication
+from eca.intelligence.output_schemas.email_extract import (
+    DecisionOut,
+    EmailExtraction,
+    Mention,
+    Statement,
+    StatusSignal,
+    Triage,
+)
+
+__all__ = ["Adjudication", "DecisionOut", "EmailExtraction", "Mention", "Statement", "StatusSignal", "Triage"]

@@ -1,0 +1,128 @@
+"""Tables owned by ``work`` (BACKEND_DESIGN.md §5.1). Mirrors migration 0008."""
+
+from __future__ import annotations
+
+from sqlalchemy import REAL, Boolean, Column, DateTime, Integer, MetaData, SmallInteger, Table, Text
+from sqlalchemy.dialects.postgresql import ARRAY, BYTEA, JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+metadata = MetaData()
+_U = PG_UUID(as_uuid=True)
+_TS = DateTime(timezone=True)
+
+work_items_table = Table(
+    "work_items",
+    metadata,
+    Column("id", _U, primary_key=True),
+    Column("user_id", _U, nullable=False),
+    Column("type", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("description", Text),
+    Column("owner_person_id", _U),
+    Column("counterparty_person_id", _U),
+    Column("requester_person_id", _U),
+    Column("project_hint", Text),
+    Column("due_at", _TS),
+    Column("due_precision", Text),
+    Column("due_text", Text),
+    Column("due_kind", Text),
+    Column("lifecycle_status", Text, nullable=False),
+    Column("verification_status", Text, nullable=False),
+    Column("origin", Text, nullable=False),
+    Column("commitment_strength", Text),
+    Column("statement_kind", Text),
+    Column("direction", Text, nullable=False),
+    Column("notes", Text),
+    Column("confidence", REAL),
+    Column("confidence_band", Text),
+    Column("reported_status", Text),
+    Column("reported_status_at", _TS),
+    Column("reported_status_evidence_id", _U),
+    Column("extraction_id", _U),
+    Column("extraction_method", Text, nullable=False),
+    Column("model", Text),
+    Column("derived_at", _TS, nullable=False),
+    Column("user_fields", ARRAY(Text), nullable=False),
+    Column("pending_adjudication", Boolean, nullable=False),
+    Column("has_conflict", Boolean, nullable=False),
+    Column("has_source_gap", Boolean, nullable=False),
+    Column("stale", Boolean, nullable=False),
+    Column("archived", Boolean, nullable=False),
+    Column("first_evidence_at", _TS),
+    Column("last_activity_at", _TS),
+    Column("state", JSONB, nullable=False),
+    Column("merged_into_id", _U),
+    Column("version", Integer, nullable=False),
+    Column("created_at", _TS),
+    Column("updated_at", _TS),
+    Column("deleted_at", _TS),
+)
+
+decisions_table = Table(
+    "decisions",
+    metadata,
+    Column("id", _U, primary_key=True),
+    Column("user_id", _U, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("statement", Text, nullable=False),
+    Column("decided_at", _TS),
+    Column("conversation_id", _U),
+    Column("project_hint", Text),
+    Column("origin", Text, nullable=False),
+    Column("verification_status", Text, nullable=False),
+    Column("confidence", REAL),
+    Column("confidence_band", Text),
+    Column("extraction_id", _U),
+    Column("extraction_method", Text, nullable=False),
+    Column("model", Text),
+    Column("derived_at", _TS, nullable=False),
+    Column("user_fields", ARRAY(Text), nullable=False),
+    Column("merged_into_id", _U),
+    Column("version", Integer, nullable=False),
+    Column("deleted_at", _TS),
+)
+
+evidence_table = Table(
+    "evidence",
+    metadata,
+    Column("id", _U, primary_key=True),
+    Column("user_id", _U, nullable=False),
+    Column("source_item_id", _U, nullable=False),
+    Column("extraction_id", _U),
+    Column("candidate_index", Integer),
+    Column("quote", Text, nullable=False),
+    Column("char_start", Integer),
+    Column("char_end", Integer),
+    Column("occurred_at", _TS, nullable=False),
+    Column("created_at", _TS),
+)
+
+item_evidence_table = Table(
+    "item_evidence",
+    metadata,
+    Column("item_type", Text, primary_key=True),
+    Column("item_id", _U, primary_key=True),
+    Column("evidence_id", _U, primary_key=True),
+    Column("relation", Text, nullable=False),
+    Column("user_id", _U, nullable=False),
+    Column("created_at", _TS),
+)
+
+context_events_table = Table(
+    "context_events",
+    metadata,
+    Column("id", _U, primary_key=True),
+    Column("user_id", _U, nullable=False),
+    Column("entity_type", Text, nullable=False),
+    Column("entity_id", _U, nullable=False),
+    Column("event_type", Text, nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("evidence_id", _U),
+    Column("actor", Text, nullable=False),
+    Column("authority", SmallInteger, nullable=False),
+    Column("materiality", SmallInteger, nullable=False),
+    Column("extraction_id", _U),
+    Column("dedupe_key", BYTEA, nullable=False),
+    Column("occurred_at", _TS, nullable=False),
+    Column("recorded_at", _TS),
+)

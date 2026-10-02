@@ -11,6 +11,7 @@ from collections.abc import Callable, Sequence
 import eca.communication
 import eca.ingestion
 import eca.intelligence
+import eca.work
 from eca.platform.clock import Clock, SystemClock
 from eca.platform.config import Settings
 from eca.platform.events import EventRegistry, Resources, default_registry
@@ -18,7 +19,7 @@ from eca.platform.jobs import PeriodicTaskSpec
 from eca.platform.uow import UnitOfWorkFactory
 from eca.worker.runner import ReconcileHook
 
-_DOMAIN_MODULES = (eca.ingestion, eca.communication)  # imported for their handler registrations
+_DOMAIN_MODULES = (eca.ingestion, eca.communication, eca.work)  # imported for their handler registrations
 
 
 def production_registry() -> EventRegistry:
@@ -27,10 +28,11 @@ def production_registry() -> EventRegistry:
 
 
 def production_resources(settings: Settings) -> Callable[[UnitOfWorkFactory], Resources]:
-    """Real providers only. Batch A has no real connector (Gmail is slice 1.5)."""
+    """AI client from settings (``API_AI_MODE``: live, replay or record) and the connectors."""
 
     def build(uow_factory: UnitOfWorkFactory) -> Resources:
-        return Resources.of(eca.ingestion.ConnectorRegistry(), SystemClock())
+        ai = eca.intelligence.build_ai_client(settings, uow_factory=uow_factory)
+        return Resources.of(eca.ingestion.build_connector_registry(settings), SystemClock(), ai)
 
     return build
 
