@@ -8,7 +8,7 @@
 
 ## 0. Implementation status
 
-Last updated 2026-10-02 (slice 0.3 locally verified; slices 0.4 and 0.5 implemented, local results in §0.4; CI has not run on them).
+Last updated 2026-10-02 (slice 0.3 locally verified; slices 0.4 and 0.5 implemented, local results in §0.4; CI run 2: lint and test pass, overall red because of the `secrets` job).
 
 | Slice | Code | Verification |
 |---|---|---|
@@ -28,6 +28,15 @@ The remote `github.com/thoshibabuls/executive-context-assistant` exists. Workflo
 | `test` | **Passed** | `pytest`: **45 passed, 0 skipped** against the `pgvector/pgvector:pg17` service (PostgreSQL 17.11). Includes the 4 PostgreSQL-backed migration tests and the 7 RT-15 tests. With `CI=true`, a missing database is a failure, not a skip |
 | `secrets` | **Failed before scanning** | The install step saves the release archive as `gitleaks.tar.gz`, but `sha256sum -c` checks the original asset name `gitleaks_8.30.1_linux_x64.tar.gz` ("No such file or directory"). This is a deterministic workflow bug, not a finding and not a flake. The history scan never ran |
 | **Overall run** | **Red (failure)** | Because of `secrets` |
+
+**Run 2** — [37032838300](https://github.com/thoshibabuls/executive-context-assistant/actions/runs/37032838300) (push to `main`, commit `d386adc`, slices 0.3–0.5, 2026-10-02):
+
+| Job | Result | Detail |
+|---|---|---|
+| `lint` | **Passed** | ruff, ruff format, mypy (strict, `eca` + `eca_evals`), lint-imports (5 contracts kept), gate A0 step (`python -m eca_evals gate-a0`: PASS) |
+| `test` | **Passed** | `pytest`: **292 passed, 0 skipped, 1 deselected** (the `live` smoke test) in 75 s against `pgvector/pgvector:pg17`; same count as locally. Includes the slice 0.3 RT-01/RT-05 tests (once each, not the 100-run loop), the 0.4 telemetry tests and the 0.5 harness tests |
+| `secrets` | **Failed before scanning** | Same workflow bug as run 1 (`sha256sum: gitleaks_8.30.1_linux_x64.tar.gz: No such file or directory`). The history scan never ran |
+| **Overall run** | **Red (failure)** | Because of `secrets` only |
 
 The workflow runs on pushes to `main` and on pull requests only. Fixing the `secrets` job is a workflow change outside the slice 0.3 code. It is required before any slice can be marked "complete" (§1.1).
 
@@ -60,7 +69,7 @@ Same environment as §0.3 (`CI=true`, so a skipped database test is a failure).
 | Gate A0 (`python -m eca_evals gate-a0`) | Pass: manifest, dataset, splits and contamination pass; cassette suites and E14 are n/a until slice 1.4 |
 | Stub runs (10,000 resamples) | AI suite (test + challenge, 72 cases): the candidate stub fixes the baseline's forwarded-promise attribution (safety 4 → 0); statement precision +0.108 (CI +0.024 to +0.222), recall +0.167 (CI +0.067 to +0.273); decision `incomplete` (no human review). Context L2 (10 chains, 13 checkpoints): oracle stub state accuracy 1.000, naive stub 0.000; decision `incomplete`. These runs validate the harness, not product quality |
 
-Dataset: `world_v1` email slice, 150 emails, 136 threads, 85 statements; splits 55 dev / 65 test / 23 sealed / 7 challenge (thread level); chains 4 dev / 5 test / 1 sealed. Labels are draft (template-generated, no human review). CI: not run on these commits yet (§0.1).
+Dataset: `world_v1` email slice, 150 emails, 136 threads, 85 statements; splits 55 dev / 65 test / 23 sealed / 7 challenge (thread level); chains 4 dev / 5 test / 1 sealed. Labels are draft (template-generated, no human review). CI: run 2 (§0.1), lint and test passed; overall red because of the `secrets` job.
 
 ### 0.2 Local environments (history; CI above is the reference evidence)
 
