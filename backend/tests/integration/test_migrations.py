@@ -13,7 +13,7 @@ from tests.conftest import RUNTIME_ROLE, TempDatabase, alembic_config
 
 pytestmark = pytest.mark.db
 
-HEAD = "0007"
+HEAD = "0009"
 
 
 def _state(admin_url: str) -> dict[str, object]:

@@ -17,6 +17,17 @@ users_table = Table(
     Column("timezone", Text, nullable=False),
     Column("work_hours", JSONB, nullable=False),
     Column("status", Text, nullable=False),
+    Column("google_sub", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+deletion_jobs_table = Table(
+    "deletion_jobs",
+    metadata,
+    Column("id", PG_UUID(as_uuid=True), primary_key=True),
+    Column("user_id", PG_UUID(as_uuid=True), nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("requested_at", DateTime(timezone=True)),
 )

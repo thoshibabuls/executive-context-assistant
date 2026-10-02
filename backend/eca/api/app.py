@@ -5,12 +5,16 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from eca.api.auth import router as auth_router
+from eca.api.connections import router as connections_router
 from eca.api.health import router as health_router
 from eca.api.middleware import RequestIdMiddleware
 from eca.api.problems import install_problem_handlers
+from eca.identity import JwksCache
 from eca.platform.config import Settings, get_settings
 from eca.platform.db import create_engine, create_session_factory
 from eca.platform.health import migration_head
@@ -46,9 +50,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.uow_factory = UnitOfWorkFactory(create_session_factory(engine)) if engine else None
         app.state.migration_head = migration_head()
+        app.state.http = httpx.AsyncClient()
+        app.state.jwks = JwksCache(app.state.http)
         try:
             yield
         finally:
+            await app.state.http.aclose()
             if engine is not None:
                 await engine.dispose()
 
@@ -70,6 +77,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
     app.add_middleware(RequestIdMiddleware)
     app.include_router(health_router)
+    app.include_router(auth_router)
+    app.include_router(connections_router)
     return app
 
 

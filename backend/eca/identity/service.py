@@ -11,10 +11,15 @@ from dataclasses import dataclass
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from eca.identity.models import users_table
+from eca.identity.events import USER_DELETION_REQUESTED, UserDeletionRequested
+from eca.identity.models import deletion_jobs_table, users_table
 from eca.platform.errors import ValidationFailed
+from eca.platform.events import NewEvent
+from eca.platform.ids import uuid7
+from eca.platform.outbox import publish
 from eca.platform.uow import UnitOfWork
 
 
@@ -58,3 +63,77 @@ async def list_active_user_ids(uow: UnitOfWork) -> list[UUID]:
         select(users_table.c.id).where(users_table.c.status == "active").order_by(users_table.c.id)
     )
     return [r.id for r in rows]
+
+
+@dataclass(frozen=True)
+class UserProfile:
+    user_id: UUID
+    email: str
+    display_name: str
+    timezone: str
+    status: str
+
+
+async def find_signin_user(uow: UnitOfWork, *, sub: str, email: str) -> UUID | None:
+    """Pre-authentication lookup by verified Google identity (``eca_signin_user_id``, 0009)."""
+    value = (
+        await uow.session.execute(
+            text("SELECT eca_signin_user_id(:sub, :email)"), {"sub": sub, "email": email}
+        )
+    ).scalar_one_or_none()
+    return None if value is None else UUID(str(value))
+
+
+async def link_google_identity(uow: UnitOfWork, *, sub: str) -> None:
+    await uow.session.execute(
+        update(users_table).where(users_table.c.id == uow.user_id).values(google_sub=sub)
+    )
+
+
+async def get_profile(uow: UnitOfWork) -> UserProfile:
+    t = users_table
+    row = (
+        await uow.session.execute(
+            select(t.c.id, t.c.email, t.c.display_name, t.c.timezone, t.c.status).where(t.c.id == uow.user_id)
+        )
+    ).one()
+    return UserProfile(row.id, row.email, row.display_name, row.timezone, row.status)
+
+
+async def request_account_deletion(uow: UnitOfWork) -> UUID:
+    """Record the request (job row ``pending``, user ``deleting``, event); idempotent per user."""
+    jobs = deletion_jobs_table
+    job_id = uuid7()
+    inserted = (
+        await uow.session.execute(
+            pg_insert(jobs)
+            .values(id=job_id, user_id=uow.user_id, kind="account", status="pending")
+            .on_conflict_do_nothing()
+            .returning(jobs.c.id)
+        )
+    ).scalar_one_or_none()
+    if inserted is None:
+        existing = (
+            await uow.session.execute(
+                select(jobs.c.id).where(
+                    jobs.c.user_id == uow.user_id,
+                    jobs.c.kind == "account",
+                    jobs.c.status.in_(["pending", "running"]),
+                )
+            )
+        ).scalar_one()
+        return UUID(str(existing))
+    await uow.session.execute(
+        update(users_table).where(users_table.c.id == uow.user_id).values(status="deleting")
+    )
+    assert uow.user_id is not None
+    await publish(
+        uow,
+        NewEvent(
+            USER_DELETION_REQUESTED,
+            "user",
+            uow.user_id,
+            UserDeletionRequested(user_id=uow.user_id, deletion_job_id=job_id),
+        ),
+    )
+    return job_id

@@ -18,6 +18,20 @@ Last updated 2026-10-02 (slice 0.3 locally verified; slices 0.4 and 0.5 implemen
 | 0.4 AI provider layer | Implemented (commit "Slice 0.4: AI provider layer") | Local gates pass (§0.4). **Exit not met**: the live smoke test has not run (no `GEMINI_API_KEY` in the build environment; it needs one run with a restricted key provided as an environment secret). Cassette replay determinism: met (tested) |
 | 0.5 Evaluation harness | Implemented (commit `95c06e4`) | Local gates pass (§0.4). Runner end to end on stubs: met. **Freeze of `golden-v0.1`: not done**: labels are draft and need the labelling owner's review (Q12); a candidate manifest (`frozen: false`) is committed |
 
+### 0.5 Phase 1 code status (2026-10-02) — code written, NOT tested
+
+At the owner's instruction ("code only, no tests"), slices 1.1–1.5 were written without running any test. Static checks were run and pass: ruff, ruff format, mypy strict (131 source files), lint-imports (10 contracts kept). **No pytest run covers migrations 0008–0009 or any slice 1.1, 1.2, 1.4 or 1.5 code; no slice below is "locally verified".**
+
+| Slice | Code on `claude/practical-allen-tqqjse` | Tests | Not done |
+|---|---|---|---|
+| 1.1 Identity and sessions | Google OIDC (PKCE, `state`, `nonce`, JWKS-verified ID token), server-side sessions, CSRF double submit, `audit_log`, `DELETE /api/v1/me` (recent re-auth, deletion request recorded), `users`, self Person, `fk_*_user` (0006), worker users policy, sign-in/session definer lookups (0009) | Not written / not run | Auth-flow tests with mocked Google, CSRF rejection, session expiry |
+| 1.2 Connections | Connect with incremental scopes, envelope-encrypted refresh tokens (AES-256-GCM, KEK from env), `granted_scopes` and capability gating, disconnect with revoke, `needs_reauth` on `invalid_grant`, routes | Not written / not run | Token-never-logged and denied-scope tests; source purge on disconnect (1.9) |
+| 1.3 Ingestion core | As committed in `695e282` | Written; individual files passed during development; full suite not run | RT tests not run as a full suite |
+| 1.4 Extract and apply | Migration 0008, AI-01 v1 prompt/schema, extraction lifecycle, apply (grounding, dates, mapping, confidence, matching, evidence, events, fold, triage), AI-02 behind the disabled role, R1/R2 | Not written / not run | RT-01 complete, RT-02/02b/03/03b/12/13/14, E1–E4, E13, E14, DIR-120, CC chains at L2; placeholder cassettes; baseline; X1/X2 runners |
+| 1.5 Gmail adapter | `history.list` incremental, profile `historyId` before import, 30-day import with page tokens, 404 → bounded re-sync, label → neutral categories, 4,500 units/min bucket | Not written / not run | Contract tests with recorded fixtures (404, 429, `invalid_grant`); deletions (§9.3, slice 1.9) |
+
+Exit criteria of slices 1.1–1.5 are **not met**: each requires tests that have not been run.
+
 ### 0.1 CI evidence (GitHub Actions)
 
 The remote `github.com/thoshibabuls/executive-context-assistant` exists. Workflow `ci`, run [37015417109](https://github.com/thoshibabuls/executive-context-assistant/actions/runs/37015417109) (run 1, push to `main`, commit `1f6b0c0`, 2026-10-02):

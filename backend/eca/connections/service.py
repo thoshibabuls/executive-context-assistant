@@ -23,7 +23,7 @@ from eca.platform.errors import NotFound, ValidationFailed
 from eca.platform.ids import uuid7
 from eca.platform.uow import UnitOfWork
 
-BATCH_A_PROVIDERS = frozenset({"fake"})
+BATCH_A_PROVIDERS = frozenset({"fake"})  # Google connections come from connect (google.py)
 
 
 @dataclass(frozen=True)

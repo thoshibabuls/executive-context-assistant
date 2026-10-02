@@ -125,7 +125,8 @@ meetings → intelligence · people · ingestion
 chat · retrieval → intelligence                               (model calls only, through its public API; §5.4)
 work → intelligence · communication · people · projects · ingestion   (email extract orchestration and apply; §5.6)
 communication → people · ingestion
-ingestion → connections → identity
+ingestion → connections · identity
+connections → identity                                      (OAuth state and Google ID-token checks for connect)
 people → identity
 intelligence → platform only                                  (receives input DTOs; never imports a domain module)
 connectors are imported only by ingestion and connections (via the connector registry)
@@ -476,6 +477,12 @@ Behavioural checks (what each role can actually do) are in RT-15 (§21).
 - **`sync_cursors`** gains a `user_id` column (not in the §11.1 DDL), so it is isolated per user like every business table.
 - No other cross-user policy is added. Join tables without their own `user_id` in the abridged DDL (`message_participants`, `item_evidence`) carry `user_id` for RLS.
 The privilege-matrix test classifies every Batch A table as a business table with `_user_isolation`, and checks the `users` exception exactly.
+
+**Sign-in and session tables (slices 1.1, 1.2; migration 0009).**
+- `auth_sessions`, `deletion_jobs`: business tables under `_user_isolation`.
+- `oauth_states`: single-use OAuth `state` rows (SHA-256 of the state, PKCE verifier, nonce; 10-minute expiry). They exist before a user is known, so they are not user-scoped: `oauth_states_api_all FOR ALL TO eca_app`, no worker access.
+- `audit_log` (owned by `privacy`, written through `platform.audit`): API INSERT only, for its own user or NULL (pre-sign-in failures); worker SELECT, INSERT and DELETE (retention).
+- Two `SECURITY DEFINER` functions, EXECUTE for the API role only, are the API's only pre-authentication reads: `eca_signin_user_id(sub, email)` returns the user ID for a verified Google identity; `eca_session_user_id(hash)` returns the user ID of an active session token hash. Each returns one UUID and nothing else; every later query runs under that user's RLS.
 
 **AI telemetry tables (slice 0.4).** `ai_calls` and `ai_cost_rollups` hold IDs and numbers, never content (§6.2), so they are classified with the delivery infrastructure: isolated per role by grants and role-targeted policies, not business tables under `_user_isolation`.
 - **Writers.** The meter runs in the process that made the call: the API role for interactive calls (it may insert only rows of its own `app.user_id`, without RETURNING, §7.3.3), the worker role for background calls (in the job's user context, or with `user_id` NULL for system calls).

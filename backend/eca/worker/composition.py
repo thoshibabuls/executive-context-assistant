@@ -32,7 +32,7 @@ def production_resources(settings: Settings) -> Callable[[UnitOfWorkFactory], Re
 
     def build(uow_factory: UnitOfWorkFactory) -> Resources:
         ai = eca.intelligence.build_ai_client(settings, uow_factory=uow_factory)
-        return Resources.of(eca.ingestion.build_connector_registry(settings), SystemClock(), ai)
+        return Resources.of(eca.ingestion.build_connector_registry(settings, uow_factory), SystemClock(), ai)
 
     return build
 

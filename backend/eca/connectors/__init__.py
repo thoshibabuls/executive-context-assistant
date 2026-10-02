@@ -22,6 +22,15 @@ from eca.connectors.fake import (
     load_eml_dir,
     parse_eml,
 )
+from eca.connectors.gmail import GmailConnector, QuotaBucket, categories_from_labels
+from eca.connectors.google_auth import (
+    CALENDAR_READONLY,
+    CAPABILITY_SCOPES,
+    GMAIL_READONLY,
+    AccessToken,
+    refresh_access_token,
+    revoke_token,
+)
 from eca.connectors.protocols import (
     CalendarConnector,
     ConnectionInfo,
@@ -31,7 +40,11 @@ from eca.connectors.protocols import (
 )
 
 __all__ = [
+    "CALENDAR_READONLY",
+    "CAPABILITY_SCOPES",
+    "GMAIL_READONLY",
     "NEUTRAL_CATEGORIES",
+    "AccessToken",
     "CalendarConnector",
     "ConnectionInfo",
     "ConnectorRegistry",
@@ -40,14 +53,19 @@ __all__ = [
     "FakeConnectorFailure",
     "FakeFeed",
     "FakeMailConnector",
+    "GmailConnector",
     "MailConnector",
     "NormalizedAttendee",
     "NormalizedEvent",
     "NormalizedMessage",
     "NormalizedPerson",
+    "QuotaBucket",
     "SyncBatch",
     "UnknownProvider",
+    "categories_from_labels",
     "feed_of",
     "load_eml_dir",
     "parse_eml",
+    "refresh_access_token",
+    "revoke_token",
 ]

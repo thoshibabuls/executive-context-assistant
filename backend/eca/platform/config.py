@@ -47,6 +47,24 @@ class Settings(BaseSettings):
     api_ai_cassette_dir: str | None = None  # required in replay and record mode
     api_ai_timeout_s: float = 60.0
 
+    # Google OAuth (slices 1.1 sign-in and 1.2 connect). Secrets only from the environment.
+    google_client_id: str | None = None
+    google_client_secret: SecretStr | None = None
+    google_signin_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
+    google_connect_redirect_uri: str = "http://localhost:8000/api/v1/connections/google/callback"
+    web_base_url: str = "http://localhost:3000"
+
+    # Sessions and CSRF (slice 1.1).
+    session_cookie_name: str = "eca_session"
+    csrf_cookie_name: str = "eca_csrf"
+    session_ttl_days: int = 14
+    session_cookie_secure: bool = True
+    reauth_max_age_minutes: int = 10  # DELETE /me needs a sign-in this recent
+
+    # Refresh-token envelope encryption (slice 1.2): base64 32-byte key-encryption key.
+    token_kek: SecretStr | None = None
+    token_kek_version: int = 1
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.api_cors_origins.split(",") if o.strip()]
