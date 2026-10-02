@@ -17,7 +17,12 @@ dependencies = [
     "alembic>=1.13",
     "structlog>=24.1",
     "sentry-sdk>=2.0",
+    # Pinned exactly: migration 0004 vendors this version's schema (BACKEND_DESIGN.md §7.7, §15).
+    "procrastinate==3.10.0",
 ]
+
+[project.scripts]
+eca = "eca.worker.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -94,7 +99,7 @@ domain_modules = [
     "eca.retrieval", "eca.chat", "eca.attention", "eca.privacy",
 ]
 shared_modules = ["eca.platform"]
-composition_modules = ["eca.api"]
+composition_modules = ["eca.api", "eca.worker"]
 http_packages = ["fastapi", "starlette"]
 
 [[tool.importlinter.contracts]]
@@ -103,7 +108,7 @@ type = "forbidden"
 source_modules = [
     "eca.identity", "eca.communication", "eca.meetings", "eca.people", "eca.work",
     "eca.projects", "eca.intelligence", "eca.retrieval", "eca.chat", "eca.attention",
-    "eca.privacy", "eca.platform", "eca.api",
+    "eca.privacy", "eca.platform", "eca.api", "eca.worker",
 ]
 forbidden_modules = ["eca.connectors"]
 
@@ -114,5 +119,5 @@ source_modules = ["eca.platform"]
 forbidden_modules = [
     "eca.identity", "eca.connections", "eca.ingestion", "eca.connectors", "eca.communication",
     "eca.meetings", "eca.people", "eca.work", "eca.projects", "eca.intelligence",
-    "eca.retrieval", "eca.chat", "eca.attention", "eca.privacy", "eca.api",
+    "eca.retrieval", "eca.chat", "eca.attention", "eca.privacy", "eca.api", "eca.worker",
 ]

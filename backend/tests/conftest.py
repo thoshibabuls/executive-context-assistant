@@ -3,7 +3,8 @@
 Database tests need ``ECA_TEST_DATABASE_URL``: a PostgreSQL (with pgvector >= 0.8) URL for a role
 that can create databases and roles (docker compose ``postgres`` user, or the CI service).
 Each session creates a throwaway database, migrates it as the owner, and connects the
-application as a separate non-superuser runtime role so RLS is genuinely enforced.
+application as separate non-superuser runtime roles (API and worker, created here because
+migrations never create roles, BACKEND_DESIGN.md §7.6) so RLS and grants are genuinely enforced.
 
 Outside CI, database tests are skipped when the variable is absent; in CI (``CI=true``) a
 missing database is an error, never a silent skip.
@@ -15,6 +16,7 @@ import os
 import uuid
 from argparse import Namespace
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,12 +35,15 @@ ensure_selector_event_loop_policy()
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 RUNTIME_ROLE = "eca_test_app"
 RUNTIME_PASSWORD = "eca_test_app_pw"  # test-only role on a throwaway database
+WORKER_ROLE = "eca_test_worker"
+WORKER_PASSWORD = "eca_test_worker_pw"  # test-only role on a throwaway database
 
 
 @dataclass(frozen=True)
 class TempDatabase:
     admin_url: str  # owner/superuser, plain postgresql:// URL
-    runtime_url: str  # non-superuser runtime role
+    runtime_url: str  # non-superuser API role
+    worker_url: str  # non-superuser worker role
     name: str
 
 
@@ -62,10 +67,14 @@ def _with_db(url: str, database: str, *, user: str | None = None, password: str 
     return u.render_as_string(hide_password=False)
 
 
-def alembic_config(admin_url: str, runtime_role: str = RUNTIME_ROLE) -> Config:
+def alembic_config(
+    admin_url: str, runtime_role: str = RUNTIME_ROLE, worker_role: str = WORKER_ROLE
+) -> Config:
     cfg = Config(
         str(BACKEND_DIR / "alembic.ini"),
-        cmd_opts=Namespace(x=[f"db_url={admin_url}", f"runtime_role={runtime_role}"]),
+        cmd_opts=Namespace(
+            x=[f"db_url={admin_url}", f"runtime_role={runtime_role}", f"worker_role={worker_role}"]
+        ),
     )
     cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
     return cfg
@@ -75,19 +84,41 @@ def _create_database(base_admin: str) -> tuple[str, str]:
     name = f"eca_test_{uuid.uuid4().hex[:12]}"
     with psycopg.connect(_plain(base_admin), autocommit=True) as conn:
         conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
-        exists = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (RUNTIME_ROLE,)).fetchone()
-        if not exists:
+        for role, password in ((RUNTIME_ROLE, RUNTIME_PASSWORD), (WORKER_ROLE, WORKER_PASSWORD)):
+            exists = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)).fetchone()
+            if not exists:
+                conn.execute(
+                    sql.SQL(
+                        "CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE"
+                    ).format(sql.Identifier(role), sql.Literal(password))
+                )
             conn.execute(
-                sql.SQL(
-                    "CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE"
-                ).format(sql.Identifier(RUNTIME_ROLE), sql.Literal(RUNTIME_PASSWORD))
+                sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                    sql.Identifier(name), sql.Identifier(role)
+                )
             )
-        conn.execute(
-            sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
-                sql.Identifier(name), sql.Identifier(RUNTIME_ROLE)
-            )
-        )
     return name, _with_db(base_admin, name)
+
+
+def temp_database(base_admin: str, name: str, admin_url: str) -> TempDatabase:
+    return TempDatabase(
+        admin_url=admin_url,
+        runtime_url=_with_db(base_admin, name, user=RUNTIME_ROLE, password=RUNTIME_PASSWORD),
+        worker_url=_with_db(base_admin, name, user=WORKER_ROLE, password=WORKER_PASSWORD),
+        name=name,
+    )
+
+
+@contextmanager
+def new_database(base_admin: str, *, migrate: bool) -> Iterator[TempDatabase]:
+    """A throwaway database, optionally migrated to head; dropped afterwards."""
+    name, admin_url = _create_database(base_admin)
+    try:
+        if migrate:
+            command.upgrade(alembic_config(admin_url), "head")
+        yield temp_database(base_admin, name, admin_url)
+    finally:
+        _drop_database(base_admin, name)
 
 
 def _drop_database(base_admin: str, name: str) -> None:
@@ -103,30 +134,22 @@ def admin_base_url() -> str:
 @pytest.fixture(scope="session")
 def migrated_db(admin_base_url: str) -> Iterator[TempDatabase]:
     """A database migrated to head, shared by the session (tests must not leave data behind)."""
-    name, admin_url = _create_database(admin_base_url)
-    try:
-        command.upgrade(alembic_config(admin_url), "head")
-        yield TempDatabase(
-            admin_url=admin_url,
-            runtime_url=_with_db(admin_base_url, name, user=RUNTIME_ROLE, password=RUNTIME_PASSWORD),
-            name=name,
-        )
-    finally:
-        _drop_database(admin_base_url, name)
+    with new_database(admin_base_url, migrate=True) as db:
+        yield db
+
+
+@pytest.fixture
+def isolated_db(admin_base_url: str) -> Iterator[TempDatabase]:
+    """A database migrated to head for one test only (for tests that leave rows or jobs behind)."""
+    with new_database(admin_base_url, migrate=True) as db:
+        yield db
 
 
 @pytest.fixture
 def fresh_db(admin_base_url: str) -> Iterator[TempDatabase]:
     """An empty, unmigrated database for migration tests."""
-    name, admin_url = _create_database(admin_base_url)
-    try:
-        yield TempDatabase(
-            admin_url=admin_url,
-            runtime_url=_with_db(admin_base_url, name, user=RUNTIME_ROLE, password=RUNTIME_PASSWORD),
-            name=name,
-        )
-    finally:
-        _drop_database(admin_base_url, name)
+    with new_database(admin_base_url, migrate=False) as db:
+        yield db
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
 # Implementation Plan — Executive Context Assistant
 
-**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 fully specified, not started
+**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete)
 **Date:** 2026-10-02
 **Authority:** Execution order, slices, deliverables and exit criteria. Architecture is defined in `TECHNICAL_DESIGN.md` and the documents in its §5.1; this plan must not introduce behaviour or architecture that those documents do not describe (`CLAUDE.md`: "If implementation requires changing product behavior, stop and update the appropriate document first").
 
@@ -8,13 +8,13 @@
 
 ## 0. Implementation status
 
-Last updated 2026-10-02 (slice 0.3 finalization, documentation only).
+Last updated 2026-10-02 (slice 0.3 implementation; local results only, CI has not run on it).
 
 | Slice | Code | Verification |
 |---|---|---|
 | 0.1 Repository hygiene | Implemented (commit `5b71b09`) | `.env` git-ignored and untracked (unit tests pass, locally and in CI). gitleaks pre-commit hook over all files: passed locally. **Git-history scan (CI `secrets` job): not performed.** The job fails in its install step before scanning (§0.1). Gemini key rotation: not verifiable from the repository (owner action) |
 | 0.2 Backend skeleton | Implemented (commit `5b71b09`) | **RT-15 passes** on PostgreSQL in CI. **"CI green" is not met**: the lint and test jobs pass, but the overall run is red because of the `secrets` job (§0.1) |
-| 0.3 Reliability core | Not started | Fully specified in §2 of this plan, slice 0.3, and in `BACKEND_DESIGN.md` §7, §14.3, §15, §21 |
+| 0.3 Reliability core | Implemented (commit "Slice 0.3: reliable event infrastructure") | **Not yet "locally verified"**: exit criteria 1, 2 and 4 met locally (§0.3); criterion 3 (100 consecutive RT-01 + RT-05 runs) in progress; CI not run on this commit |
 
 ### 0.1 CI evidence (GitHub Actions)
 
@@ -28,6 +28,20 @@ The remote `github.com/thoshibabuls/executive-context-assistant` exists. Workflo
 | **Overall run** | **Red (failure)** | Because of `secrets` |
 
 The workflow runs on pushes to `main` and on pull requests only. Fixing the `secrets` job is a workflow change outside the slice 0.3 code. It is required before any slice can be marked "complete" (§1.1).
+
+### 0.3 Slice 0.3 local results (2026-10-02, Linux cloud session)
+
+Environment: Python 3.11; PostgreSQL 17.11 with pgvector 0.8.7 in Docker (`pgvector/pgvector:pg17`, the CI image), `ECA_TEST_DATABASE_URL` set, `CI=true`.
+
+| Exit criterion | Result |
+|---|---|
+| 1. ruff, ruff format, mypy (strict, 43 files), lint-imports (`eca.worker` as composition module, 3 contracts) | Pass |
+| 2. Full pytest with zero skipped | **165 passed, 0 skipped** (96 PostgreSQL tests, 69 without a database) |
+| 3. RT-01 (infrastructure level, 9 tests) + RT-05 (5 tests), 100 consecutive runs, no reruns | **In progress, not met yet**: 24 of 100 consecutive runs passed (14 passed each, about 46 s per run), no failure, when this was committed. Command: `pytest -q -x tests/reliability/test_rt01_infrastructure.py tests/reliability/test_rt05_duplicate_dispatch.py`, repeated. An earlier loop stopped at run 1 on a test defect: case (d) counted the recovery of a periodic `eca.reconcile` job that was running at the crash as a second handler recovery. The test now counts handler jobs only, and the loop was restarted from zero |
+| 4. No domain schema; no FK on `outbox.user_id`; migrations create no roles | Met (tested: `test_migrations_0003.py`, `test_privileges.py`) |
+| 5. This section updated with measured results | This section; to be completed with the final loop result |
+
+CI: not run on this commit. Pushes to a non-`main` branch do not trigger the workflow, and the `secrets` job bug (§0.1) still keeps any run red. Slice 0.3 becomes "locally verified" when criterion 3 completes, and "complete" only with a green CI run.
 
 ### 0.2 Local environments (history; CI above is the reference evidence)
 
@@ -89,7 +103,7 @@ Authoritative design: `BACKEND_DESIGN.md` §7 (outbox, dispatch, reconciler, acc
 Three revisions with one concern each, in a linear chain. Each creates its objects together with their grants and RLS in one transaction:
 
 - **`0002_runtime_role_access`**:
-  - Checks that both runtime roles exist, are not SUPERUSER or BYPASSRLS, are distinct and are not members of each other; it fails loudly otherwise.
+  - Checks that both runtime roles exist, have none of SUPERUSER, BYPASSRLS, CREATEROLE or CREATEDB, are distinct, are not the migration role, and are not members of each other, of the migration role or of a privileged role; it fails loudly otherwise (`BACKEND_DESIGN.md` §7.6).
   - Gives the worker role USAGE on `public`, EXECUTE on `eca_current_user_id()`, SELECT on `alembic_version`, and default privileges (SELECT, INSERT, UPDATE, DELETE on tables; USAGE, SELECT on sequences).
   - Revokes the API role's INSERT, UPDATE and DELETE on `alembic_version`. Those privileges were granted by `0001`'s `ON ALL TABLES`, contrary to `BACKEND_DESIGN.md` §7.6.
   - Creates no tables and no roles.
@@ -145,7 +159,8 @@ The resulting exact privilege state, and what the matrix test asserts, are in `B
 - Transaction boundaries: the business transaction (with its outbox row) commits before any job exists. Each dispatcher batch is one transaction. Procrastinate writes jobs through its own connection. Each handler job is one transaction that includes its consumption record.
 - Graceful stop: stop claiming and fetching, then finish in-flight jobs up to a timeout. Unfinished jobs are recovered by stalled-job recovery.
 - `eca.worker` is added to `composition_modules` in the import-linter configuration.
-- Operator command `eca ops outbox retry [--event-id …]` (`failed` → `pending`, `attempts = 0`, runs as `eca_worker`). It is the only `eca ops` subcommand in this slice, because `failed` must be recoverable.
+- At start the worker checks `current_user` and refuses to run unless it is connected as the worker role (never the API role).
+- Operator command `eca ops outbox retry [--event-id …]` (console script `eca` → `eca.worker.cli`) (`failed` → `pending`, `attempts = 0`, runs as `eca_worker`). It is the only `eca ops` subcommand in this slice, because `failed` must be recoverable.
 
 **Reconciler (infrastructure only, `BACKEND_DESIGN.md` §7.5)**
 
@@ -162,7 +177,7 @@ The resulting exact privilege state, and what the matrix test asserts, are in `B
 - Synthetic test fixtures, all under `backend/tests/reliability/support/`, never in `eca`:
   - `synthetic.py` holds test-only event types (prefix `test.`) and handlers. Each handler appends a row to `rt_effects`, which has **no** unique constraint, so a duplicate effect is visible instead of hidden by a key. The table also records `current_setting('app.user_id')` inside the handler. A fixture creates it in the throwaway database and grants it to the test worker role; Alembic never creates it.
   - The flaky handler for case (f) decides from Procrastinate's job attempt number, not from database state.
-  - `worker_main.py` is the test launcher: `python -m tests.reliability.support.worker_main --mode worker|dispatcher`. It registers the synthetic handlers in a registry and calls `eca.worker`'s public run function with a fast `WorkerConfig` (retry base 0.05 s, heartbeat 0.5 s, stalled timeout 2 s, tick 0.1 s).
+  - `worker_main.py` is the test launcher: `python -m tests.reliability.support.worker_main --mode all|dispatcher|jobs`. It registers the synthetic handlers in a registry and calls `eca.worker`'s public run function with a fast `WorkerConfig` (retry base 0.05 s, heartbeat 0.5 s, stalled timeout 2 s, tick 0.1 s).
   - `tests/` is not part of the installed package, and nothing in `eca` imports it.
 - **RT-01, infrastructure level** (`BACKEND_DESIGN.md` §21):
   - (a) A business transaction commits a row and an outbox event while no dispatcher runs. A dispatcher started later dispatches it. The effect occurs once.

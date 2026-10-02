@@ -13,6 +13,8 @@ from tests.conftest import RUNTIME_ROLE, TempDatabase, alembic_config
 
 pytestmark = pytest.mark.db
 
+HEAD = "0004"
+
 
 def _state(admin_url: str) -> dict[str, object]:
     with psycopg.connect(admin_url) as conn:
@@ -48,7 +50,7 @@ def test_upgrade_downgrade_upgrade(fresh_db: TempDatabase) -> None:
     assert (major, minor) >= (0, 8)
     assert state["function"] is True
     assert state["runtime_can_execute"] is True
-    assert state["revision"] == "0001"
+    assert state["revision"] == HEAD
 
     command.downgrade(cfg, "base")
     state = _state(fresh_db.admin_url)
@@ -57,7 +59,7 @@ def test_upgrade_downgrade_upgrade(fresh_db: TempDatabase) -> None:
     assert "vector" not in state["extensions"]  # type: ignore[operator]
 
     command.upgrade(cfg, "head")
-    assert _state(fresh_db.admin_url)["revision"] == "0001"
+    assert _state(fresh_db.admin_url)["revision"] == HEAD
 
 
 def test_current_user_id_is_null_when_unset(migrated_db: TempDatabase) -> None:
@@ -73,7 +75,7 @@ def test_readyz_reports_ready_on_migrated_database(migrated_db: TempDatabase) ->
     assert r.json() == {
         "status": "ready",
         "checks": {"database": True, "schema_at_head": True},
-        "revision": {"current": "0001", "head": "0001"},
+        "revision": {"current": HEAD, "head": HEAD},
     }
 
 

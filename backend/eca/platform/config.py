@@ -29,10 +29,13 @@ class Settings(BaseSettings):
     api_cors_origins: str = ""
     api_log_level: str = "INFO"
 
-    # Runtime connection (non-superuser role subject to RLS) and migration connection (schema owner).
+    # Runtime connections (non-superuser roles subject to RLS) and migration connection (schema owner).
+    # The API process uses the API role, the worker process the worker role (BACKEND_DESIGN.md §7.6).
     api_database_url: SecretStr | None = None
+    api_worker_database_url: SecretStr | None = None
     api_migration_database_url: SecretStr | None = None
     api_db_runtime_role: str = "eca_app"
+    api_db_worker_role: str = "eca_worker"
 
     sentry_dsn: SecretStr | None = None
 

@@ -25,10 +25,14 @@ AS $$ SELECT NULLIF(current_setting('app.user_id', true), '')::uuid $$
 DROP_CURRENT_USER_ID_FUNCTION_SQL = f"DROP FUNCTION IF EXISTS {CURRENT_USER_ID_FUNCTION}()"
 
 
-def _identifier(name: str) -> str:
+def validate_identifier(name: str) -> str:
+    """Return ``name`` if it is a plain lower-case SQL identifier, else raise ``ValueError``."""
     if not _IDENTIFIER.fullmatch(name):
         raise ValueError(f"Invalid SQL identifier: {name!r}")
     return name
+
+
+_identifier = validate_identifier
 
 
 def user_isolation_ddl(table: str, *, column: str = "user_id") -> list[str]:

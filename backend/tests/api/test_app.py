@@ -12,6 +12,8 @@ from eca.api.app import create_app
 from eca.platform import errors
 from eca.platform.config import Settings
 
+HEAD = "0004"
+
 
 def _client(app: FastAPI) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
@@ -43,7 +45,7 @@ def test_readyz_without_database_is_503(settings_no_db: Settings) -> None:
         r = client.get("/readyz")
     assert r.status_code == 503
     assert r.json()["checks"] == {"database": False, "schema_at_head": False}
-    assert r.json()["revision"]["head"] == "0001"
+    assert r.json()["revision"]["head"] == HEAD
 
 
 def test_readyz_with_unreachable_database_is_503() -> None:
