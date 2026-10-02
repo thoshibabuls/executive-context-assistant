@@ -386,7 +386,7 @@ Because statements (not final types) are stored, changes to the §5.5 mapping ar
 
 ## 11. Prompts
 
-- Versioned `ai/prompts/<role>/v<N>.md` with Pydantic schema `ai/schemas/<role>.py`; `prompt_version` and `schema_version` on every `extractions` and `ai_calls` row.
+- Versioned `eca/intelligence/prompts/<role>/v<N>.md` with Pydantic schema `eca/intelligence/output_schemas/<role>.py` (provider layer location: `BACKEND_DESIGN.md` §5.4); `prompt_version` and `schema_version` on every `extractions` and `ai_calls` row.
 - Order: stable instructions and schema → user card → candidates or packet → delimited untrusted content → question.
 - Untrusted content is declared as data; no side-effecting tools (`TECHNICAL_DESIGN.md` §17.6).
 - Up to 3 of the user's recent rejections from the same sender as negative examples in AI-01 (deterministic selection). Few-shot examples come only from the `dev` split.

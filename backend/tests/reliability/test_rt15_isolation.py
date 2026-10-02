@@ -132,8 +132,3 @@ async def test_rolled_back_unit_of_work_leaves_no_context(uow_factory: UnitOfWor
             raise RuntimeError("fail inside the unit of work")
     async with uow_factory(user_id=None) as uow:
         assert await _payloads(uow) == []
-
-
-async def test_user_id_must_be_a_uuid(uow_factory: UnitOfWorkFactory) -> None:
-    with pytest.raises(TypeError):
-        uow_factory(user_id="00000000-0000-7000-8000-00000000000a")  # type: ignore[arg-type]

@@ -414,7 +414,7 @@ Report chain recall, context precision, latest-state correctness, forbidden-fact
 | Re-processing | Re-run extraction with same prompt version | No AI call (stored result reused); no new items or events |
 | Re-apply (R2) | Rebuild AI-derived state from stored extractions | Zero AI calls; user-authored values and user-touched item IDs preserved (RT-13, RT-14) |
 | Prompt version bump | Re-run with new prompt version on a chain | No duplicate items; user-confirmed fields untouched; older extraction `superseded` |
-| Crash between stages | Kill workers after source commit, after extraction commit, mid-apply (RT-01, RT-02) | Final state identical to the no-crash run |
+| Crash between stages | Kill workers after source commit, after extraction commit, mid-apply (RT-01 pipeline level, RT-02) | Final state identical to the no-crash run |
 | Source deletion | Delete a message after extraction | Evidence tombstoned; not cited |
 | Retention purge | Purge raw bodies | Answers still correct from items/evidence quotes; note on missing original |
 | Injection | Instructions inside email/transcript | No state change; no instruction-following |
@@ -481,7 +481,7 @@ Human review of real user data happens only with the user's explicit consent for
 | Gate | When | Blocks merge/release if |
 |---|---|---|
 | G1 Unit | Every commit | Any L1 failure |
-| G2 Linking/state | PR touching `eca/work`, `eca/intelligence`, `eca/ai`, `eca/communication`, `eca/meetings`, `eca/people` | Link precision < 0.90 or recall < 0.85; duplicate rate > 5%; any false closure; any authority violation; ★ chain state failure; any RT-01–RT-05 failure |
+| G2 Linking/state | PR touching `eca/work`, `eca/intelligence` (including its provider layer, prompts and output schemas), `eca/communication`, `eca/meetings`, `eca/people` | Link precision < 0.90 or recall < 0.85; duplicate rate > 5%; any false closure; any authority violation; ★ chain state failure; any RT-01–RT-05 failure |
 | G3 Retrieval | PR touching `eca/retrieval`, `eca/chat` | Chain recall < 0.90 overall or < 1.0 on ★ chains; context precision drop > 5 points |
 | G4 Answer (subset) | PR touching prompts, models, packet assembly | Forbidden fact on any ★ chain; false-absence > 0; citation validity < 0.98; latest-state correctness < 0.90 |
 | G5 Isolation | Every PR | Any cross-tenant leakage (CC-33, RT-15) |

@@ -431,7 +431,7 @@ Every retriever applies the same scope before ranking:
 
 | Filter | Rule |
 |---|---|
-| User | RLS on every table (`app.user_id`), plus explicit `user_id` predicates in every SQL, vector and FTS query; unset context returns nothing |
+| User | RLS on every user-owned table (`app.user_id`; delivery infrastructure is isolated by database role, `BACKEND_DESIGN.md` §7.6), plus explicit `user_id` predicates in every SQL, vector and FTS query; unset context returns nothing |
 | Source authorization | Sources from connections that are revoked or disconnected are excluded unless the user chose "keep data" on disconnect; the coverage block reports the gap. Calendar-derived meetings are excluded if the calendar grant was revoked |
 | Trash and deletion | Trashed/spam sources excluded; deleted sources gone (evidence quotes redacted) |
 | Session scope | Meeting-scoped sessions see the meeting, its linked prior meetings and their items only |

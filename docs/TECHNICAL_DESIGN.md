@@ -1,6 +1,6 @@
 # Technical Design — Executive Context Assistant
 
-**Status:** Reconciled architecture (pre-implementation)
+**Status:** Reconciled architecture; slices 0.1–0.2 implemented (see `IMPLEMENTATION_PLAN.md` §0); pre-0.3 reconciliation applied 2026-10-02
 **Date:** 2026-10-02
 **Inputs:** `docs/PRD.md` v1.0, repository inspection, current Google documentation (References), `CLAUDE.md`
 
@@ -54,7 +54,7 @@ provider/upload ─sync─▶ SourceItem (SOURCE, immutable content, hashed)
 
 **Integration boundaries:** Google OIDC/OAuth, Gmail API (read-only), Calendar API (read-only), Gemini API (paid tier), object storage. Drive is not in the MVP.
 
-**Security boundaries:** browser ↔ API (session cookie + CSRF); API/worker ↔ Postgres (RLS per user); worker ↔ Google (encrypted refresh tokens); backend ↔ Gemini (untrusted content in prompts, no side-effecting tools); object storage (private, pre-signed URLs).
+**Security boundaries:** browser ↔ API (session cookie + CSRF); API/worker ↔ Postgres (separate API and worker roles; RLS per user on business tables; role grants on delivery infrastructure, `BACKEND_DESIGN.md` §7.6); worker ↔ Google (encrypted refresh tokens); backend ↔ Gemini (untrusted content in prompts, no side-effecting tools); object storage (private, pre-signed URLs).
 
 **Evaluation requirements:** PRD §41–45 (`AI_EVALUATION.md`, `CONTEXT_EVALUATION.md`).
 
@@ -98,10 +98,12 @@ provider/upload ─sync─▶ SourceItem (SOURCE, immutable content, hashed)
 | `docs/PRD.md` | PRD v1.0 | Product source of truth |
 | `docs/*.md` | Architecture documents (§5.1) | This reconciliation |
 | `CLAUDE.md` | Engineering rules | Followed by all documents |
-| `.env` | `NEXT_PUBLIC_API_URL`, `API_INTERNAL_URL`, `API_HOST`, `API_PORT`, `API_CORS_ORIGINS`, `API_ENV`, `API_DATABASE_URL`, `GEMINI_API_KEY`, `API_GEMINI_MODEL` | Indicates Next.js web + Python API + SQL DB; contains a real key |
-| `test_gemini_key.py` | Stdlib Gemini key check | Default model deprecated |
+| `.env` (git-ignored, never committed) | `NEXT_PUBLIC_API_URL`, `API_INTERNAL_URL`, `API_HOST`, `API_PORT`, `API_CORS_ORIGINS`, `API_ENV`, `API_DATABASE_URL`, `GEMINI_API_KEY`, `API_GEMINI_MODEL` | Indicates Next.js web + Python API + SQL DB; contains a real key; `.env.example` lists names only |
+| `test_gemini_key.py` | Stdlib Gemini key check | Default model deprecated; replaced by the slice 0.4 smoke test |
+| `backend/` | Slices 0.1–0.2 (commit `5b71b09`): `eca` package with `platform` (config, errors, db, unit of work, RLS helpers, health, logging, runtime), `api` (FastAPI app, `/healthz`, `/readyz`, request IDs, Problem Details) and 14 domain module package roots (no domain code yet); Alembic baseline `0001` (extensions, `eca_current_user_id()`, runtime-role grants; no tables); custom import-linter contract; tests (unit, API, integration, RT-15) | Foundation only |
+| `.github/workflows/ci.yml`, `.pre-commit-config.yaml`, `.gitleaks.toml`, `docker-compose.yml`, `docker/postgres/init/` | CI (lint, types, tests with a pgvector service, gitleaks), pre-commit hooks, local PostgreSQL 17 + pgvector with role `eca_app` | Present; CI has not run (no remote yet) |
 
-No application code, frontend, schema, tests, CI, deployment config or git repository exist yet.
+The git repository exists (branch `main`). There is no frontend, no domain schema and no worker yet. Current verification status per slice: `IMPLEMENTATION_PLAN.md` §0.
 
 **Reusable evidence from the sibling project (`D:\project`):** FastAPI + SQLAlchemy async + Alembic + Pydantic v2 + `google-genai` + tenacity + pytest/httpx; dialect-adaptive types; audit log; Render/Railway + Vercel deployment. Reused: backend stack and conventions. Not reused: the SQLite runtime fallback (pgvector, FTS, `SKIP LOCKED` and RLS require Postgres; local Postgres runs in Docker), the asyncpg driver (psycopg 3 is used for both SQLAlchemy and Procrastinate), LangGraph (not needed for fixed pipelines).
 
@@ -176,8 +178,9 @@ No application code, frontend, schema, tests, CI, deployment config or git repos
 
 ```text
 backend/eca/<module>/{router,service,repository,models,schemas,events,tasks}.py
+backend/eca/platform/  (base layer)   backend/eca/api/, backend/eca/worker/  (composition; worker from slice 0.3)
 backend/eca/connectors/{base,dto,registry}.py, connectors/google/{oauth,gmail,calendar,mapping}.py
-backend/eca/ai/{provider,gemini,registry,meter}.py, ai/prompts/<role>/v<N>.md, ai/schemas/<role>.py
+backend/eca/intelligence/provider/{gemini,registry,meter,cassette}.py, intelligence/prompts/<role>/v<N>.md, intelligence/output_schemas/<role>.py
 backend/migrations/ (Alembic)   backend/tests/{unit,integration,contract,api,reliability}/
 web/ (Next.js)   evals/{ai,context}/   config/{models,pricing,priority}.yaml   docs/
 ```
@@ -376,7 +379,7 @@ export_jobs / deletion_jobs(id, user_id, status, progress jsonb, timestamps)
 
 ### 9.2 Row-level security
 
-Every table with `user_id` has an RLS policy keyed on `current_setting('app.user_id', true)`; the unit of work sets it per transaction; unset fails closed (`BACKEND_DESIGN.md` §17.1).
+Every user-owned business table has an RLS policy (ENABLE + FORCE) keyed on `current_setting('app.user_id', true)`; the unit of work sets it per transaction; unset fails closed (`BACKEND_DESIGN.md` §17.1). Delivery infrastructure (`outbox`, `event_consumptions`, Procrastinate tables) is not user-scoped: it is isolated per database role by grants and role-targeted policies, so the API role can only insert its own user's outbox rows and only the worker role reads across users (`BACKEND_DESIGN.md` §7.6).
 
 ### 9.3 Retention defaults (configurable per user)
 
@@ -417,7 +420,7 @@ Sync, cursors, versioning, cadence, initial import, quotas and crash recovery: `
 
 ### 10.5 Gemini
 
-`google-genai` SDK behind `eca.ai.provider`; stateless `generateContent` (session state stays in our database, so it is portable, auditable and deletable); structured outputs; role registry and model IDs: `AI_PIPELINE.md` §2.
+`google-genai` SDK behind the provider layer inside the `intelligence` module (`eca.intelligence`, `BACKEND_DESIGN.md` §5.4); stateless `generateContent` (session state stays in our database, so it is portable, auditable and deletable); structured outputs; role registry and model IDs: `AI_PIPELINE.md` §2.
 
 ### 10.6 Object storage
 
@@ -569,7 +572,7 @@ Refresh tokens: envelope encryption (per-row AES-256-GCM data key, KEK in cloud 
 
 ### 17.3 Least privilege
 
-Read-only Google scopes; no side-effecting model tools; the planner selects code-defined retrievers and cannot write SQL; database roles `app_migrator` (DDL, bypasses RLS), `app_runtime` (DML, RLS enforced), `app_readonly` (non-content analytics); per-environment secrets in the platform secret manager.
+Read-only Google scopes; no side-effecting model tools; the planner selects code-defined retrievers and cannot write SQL; database roles (authoritative list and privilege matrix: `BACKEND_DESIGN.md` §7.6): migration role `app_migrator` (owner, DDL, bypasses RLS; `postgres` in local compose and CI; release step only), API role `eca_app` (DML on business tables with RLS enforced; INSERT-only on `outbox`; no access to other delivery infrastructure), worker role `eca_worker` (same RLS on business tables; cross-user access to delivery infrastructure through explicit role policies), `app_readonly` (non-content analytics; created only when a consumer exists); each process receives only its own role's credentials; per-environment secrets in the platform secret manager.
 
 ### 17.4 Isolation and source authorization
 

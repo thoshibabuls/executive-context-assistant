@@ -70,6 +70,17 @@ def test_domain_errors_carry_no_http_concepts() -> None:
     assert issubclass(errors.BudgetExceeded, errors.RateLimited)
 
 
+def test_unit_of_work_user_id_must_be_a_uuid() -> None:
+    """The type check runs at construction, before any connection is opened (no database needed)."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from eca.platform.uow import UnitOfWorkFactory
+
+    factory = UnitOfWorkFactory(async_sessionmaker())
+    with pytest.raises(TypeError):
+        factory(user_id="00000000-0000-7000-8000-00000000000a")  # type: ignore[arg-type]
+
+
 def test_uvicorn_loop_factory_is_selector_based() -> None:
     """uvicorn on Windows defaults to ProactorEventLoop, which psycopg 3 async cannot use."""
     import asyncio

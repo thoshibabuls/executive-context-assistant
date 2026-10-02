@@ -1,6 +1,6 @@
 # Backend Design — Executive Context Assistant
 
-**Status:** Reconciled architecture (pre-implementation)
+**Status:** Reconciled architecture; slices 0.1–0.2 implemented. Pre-0.3 reconciliation (2026-10-02): outbox FK timing (§7.3.1), database roles and access model (§7.6), reconciler scope (§7.5), AI provider location (§5.4), RT-01 levels (§21)
 **Date:** 2026-10-02
 **Authority:** This document is authoritative for backend modules, the transaction and event model, the source-of-truth model, extraction/apply stages, idempotency, synchronization, concurrency, deletion, errors and retries, jobs, the HTTP API and the database schema. AI calls and their costs are defined in `AI_PIPELINE.md`; context and retrieval in `CONTEXT_ARCHITECTURE.md`.
 **Inputs:** `docs/PRD.md`, `docs/TECHNICAL_DESIGN.md`, `docs/CONTEXT_ARCHITECTURE.md`, `docs/AI_PIPELINE.md`, `CLAUDE.md`, installed skills (`ai-toolkit:backend-api-design`, `ai-toolkit:database-patterns`, `ai-toolkit:python-api-endpoint-creator`), official Google and Procrastinate documentation (References)
@@ -84,11 +84,11 @@ A single deployable keeps one transaction around the context core (items, eviden
 
 ### 4.2 Process types (one image)
 
-| Process | Command | Runs |
-|---|---|---|
-| `api` | `uvicorn eca.api.app:app` | HTTP API, SSE streaming, OAuth callbacks |
-| `worker` | `procrastinate worker` (all queues) + outbox dispatcher loop + reconciler | All background work, including media |
-| `release` | `alembic upgrade head` | Migrations, once per deploy |
+| Process | Command | Runs | Database role (§7.6) |
+|---|---|---|---|
+| `api` | `uvicorn eca.api.app:app` | HTTP API, SSE streaming, OAuth callbacks | API role `eca_app` |
+| `worker` | `python -m eca.worker` (composition package, like `eca.api`): one Procrastinate worker per queue (§15) + outbox dispatcher loop; reconciler as a periodic task | All background work, including media | Worker role `eca_worker` |
+| `release` | `alembic upgrade head` | Migrations, once per deploy | Migration role (schema owner) |
 
 Media processing (ffmpeg) runs on the `media` queue with concurrency 1 in the same worker for the MVP. A separate `worker-media` deployment of the same image is an operational option when resource contention is measured, not a design requirement.
 
@@ -110,7 +110,7 @@ Media processing (ffmpeg) runs on the `media` queue with concurrency 1 in the sa
 | `people` | `persons`, `person_identifiers`, `organizations`, `entity_mentions` | resolve, merge, person context, profile updates | `PersonChanged`, `PersonsMerged` |
 | `work` | `work_items`, `work_item_owners`, `decisions`, `evidence`, `item_evidence`, `context_events`, `entity_links` | `apply_extraction`, `append_event`, fold, user actions, merge, queries by direction | `WorkItemChanged`, `DecisionChanged`, `ConflictDetected` |
 | `projects` | `projects`, `project_members` | hint matching, topic mode, project context | `ProjectChanged` |
-| `intelligence` | `extractions`, `ai_calls` | `extract_message`, `extract_meeting`, `adjudicate`, `embed`, `summarize`, provider wrapper | `ExtractionCompleted`, `ExtractionFailed` |
+| `intelligence` | `extractions`, `ai_calls` | `extract_message`, `extract_meeting`, `adjudicate`, `embed`, `summarize`, AI provider layer (§5.4) | `ExtractionCompleted`, `ExtractionFailed` |
 | `retrieval` | `chunks`, `retrieval_traces` | index, plan, retrieve, assemble packet, day query | — |
 | `chat` | `chat_sessions`, `chat_messages` | sessions, answer stream, reply guidance | — |
 | `attention` | `reminders`, `notifications`, `briefings`; priority columns written via owning modules' services | priority, reminders, prep sections, briefing | `ReminderDue` |
@@ -122,6 +122,7 @@ Media processing (ffmpeg) runs on the `media` queue with concurrency 1 in the sa
 chat → retrieval → (read) work · people · projects · meetings · communication
 attention → work · communication · meetings · people        (writes priority via their services)
 meetings → intelligence · people · ingestion
+chat · retrieval → intelligence                               (model calls only, through its public API; §5.4)
 communication → people · ingestion
 work → people · projects
 ingestion → connections → identity
@@ -136,6 +137,28 @@ Reactions that would create cycles (e.g., `work` changes → `attention` recompu
 - Modules import each other only through `eca/<module>/__init__.py` (services, DTOs, events).
 - `import-linter` contracts in CI: layer order (router → service → repository), no cross-module `repository`/`models` imports, `connectors.*` only from `ingestion`/`connections`, `intelligence` cannot import any source-owning module's repository.
 - Each module implements `purge_user(user_id)`, `purge_connection(connection_id)` and `export_user(user_id)`.
+- Composition packages `eca.api` (slice 0.2) and `eca.worker` (slice 0.3) wire modules together; they are listed as `composition_modules` in the import-linter configuration and are imported by nothing.
+
+### 5.4 AI provider layer location (decision)
+
+The AI provider layer lives **inside the `intelligence` module**. There is no `eca.ai` package.
+
+```text
+backend/eca/intelligence/provider/{__init__,gemini,registry,meter,cassette}.py   provider wrapper, role registry, ai_calls meter, cassettes
+backend/eca/intelligence/prompts/<role>/v<N>.md                                  versioned prompts
+backend/eca/intelligence/output_schemas/<role>.py                                Pydantic structured-output schemas
+```
+
+`output_schemas/` is named so that it does not collide with the per-module `schemas.py` (API DTOs, §2.2).
+
+| Reason | Detail |
+|---|---|
+| Single writer | `intelligence` owns `ai_calls` (§5.1). The meter writes `ai_calls`, so it must be inside the owning module |
+| One choke point for cost and safety | Attempt caps (`AI_PIPELINE.md` §7), per-user budgets and degradation (`AI_COST_MODEL.md` §7) and metering apply to every call only if every call passes through one module's public API |
+| Existing contracts keep their meaning | The invariant "`intelligence` cannot import a source-owning module's repository" (§5.3, §6.3) covers all AI code only if all AI code is in `intelligence` |
+| No new boundary type | A top-level `eca.ai` would be either a 15th domain module (splitting AI ownership with no boundary benefit) or a shared layer like `platform` (importable everywhere, so callers could bypass budgets, and a shared layer would write a domain table) |
+
+Consequences: modules that need a model call (`meetings`, `chat`, `retrieval`, and the extraction jobs) use `eca.intelligence`'s public API only. Slice 0.4 adds an import-linter `forbidden` contract so that only `eca.intelligence` imports `google.genai`. Prompts, output schemas and cassettes are versioned with the module.
 
 ---
 
@@ -193,13 +216,13 @@ Columns `origin ∈ {source, computed, ai, user}` and `verification_status ∈ {
 | `chat_sessions`, `chat_messages` | USER-AUTHORED (questions) + AI-DERIVED (answers with citation snapshots) | chat | chat, evaluation | Append-only | — | User can delete sessions (permanent); account | — |
 | `ai_calls` | COMPUTED (telemetry, no content) | intelligence | ops, cost | Insert | — | Permanent after 90 days; user_id nulled on account deletion | — |
 | `audit_log` | COMPUTED | privacy (via `platform.audit`) | ops | Append-only | — | Retained 1 year without content | — |
-| `outbox`, `event_consumptions`, `idempotency_keys` | COMPUTED (delivery mechanics) | platform | platform | State transitions | — | Permanent after 7 days (outbox, consumptions) / 24 h (idempotency) | Keys enforce uniqueness |
+| `outbox`, `event_consumptions`, `idempotency_keys` | COMPUTED (delivery mechanics) | platform | platform; `outbox` and `event_consumptions` are read only by the worker role (§7.6) | State transitions | — | Permanent after 7 days (outbox, consumptions) / 24 h (idempotency); a user's outbox rows are deleted by account deletion (§13.3) | Keys enforce uniqueness |
 
 ### 6.3 Verified invariants
 
 | Invariant | How it is enforced | Test |
 |---|---|---|
-| **AI code cannot mutate source-of-truth data** | `intelligence` has no repository for SOURCE tables (import contract); `apply` writes only AI-DERIVED tables and calls `communication.set_triage_projection` for the `messages.triage` projection column; the DB role is shared, so enforcement is by module contract plus a CI test that runs extract/apply with a SQL audit trigger in test mode rejecting writes to SOURCE tables from those code paths | RT-12 (§21) |
+| **AI code cannot mutate source-of-truth data** | `intelligence` has no repository for SOURCE tables (import contract); `apply` writes only AI-DERIVED tables and calls `communication.set_triage_projection` for the `messages.triage` projection column; extract and apply both run as the worker role (§7.6), which every module's jobs share, so enforcement is by module contract plus a CI test that runs extract/apply with a SQL audit trigger in test mode rejecting writes to SOURCE tables from those code paths | RT-12 (§21) |
 | **User-authored corrections survive recomputation** | User actions are `context_events` with `actor = user`, authority 5; R1/R2 never delete them; items with any user event keep their IDs during R2; fold applies authority before recency | RT-13, `CONTEXT_EVALUATION.md` CC-29–CC-31 |
 | **AI-derived state can be reconstructed from source + events** | Projections = fold(events); model events = apply(stored extractions); extractions = AI(source) | RT-14 (rebuild equivalence) |
 | **Every AI-derived item references existing source evidence** | FKs `evidence → source_items`, `item_evidence → evidence`; deletion redacts quotes and flags `has_source_gap` rather than leaving dangling rows | RT-11 |
@@ -236,32 +259,55 @@ Procrastinate does **not** take part in the SQLAlchemy transaction. It writes jo
 
 ```sql
 CREATE TABLE outbox (
-  id              uuid PRIMARY KEY,                 -- UUIDv7 (time-ordered)
-  user_id         uuid NULL REFERENCES users(id),
-  event_type      text NOT NULL,                    -- e.g. 'MessageNormalized'
+  id              uuid PRIMARY KEY,                 -- UUIDv7 (time-ordered), generated by platform.publish
+  user_id         uuid NULL,                        -- NULL = system event; FK to users(id) added in slice 1.1 (§7.3.1)
+  event_type      text NOT NULL,                    -- registered event type, e.g. 'MessageNormalized'
   aggregate_type  text NOT NULL, aggregate_id uuid NOT NULL,
   payload         jsonb NOT NULL,                   -- IDs and small facts only, never content
   correlation     jsonb NOT NULL DEFAULT '{}',      -- request_id / trace ids
   status          text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','dispatched','failed')),
   attempts        int NOT NULL DEFAULT 0,
   next_attempt_at timestamptz NOT NULL DEFAULT now(),
-  last_error      text NULL,
+  last_error      text NULL,                        -- error code and exception class only, never message content
   created_at      timestamptz NOT NULL DEFAULT now(),
   dispatched_at   timestamptz NULL);
 CREATE INDEX ix_outbox_pending ON outbox (next_attempt_at) WHERE status = 'pending';
+CREATE INDEX ix_outbox_user ON outbox (user_id) WHERE user_id IS NOT NULL;   -- account deletion; supports the slice 1.1 FK
 
 CREATE TABLE event_consumptions (
-  event_id   uuid NOT NULL,                         -- outbox.id
-  handler    text NOT NULL,
+  event_id    uuid NOT NULL REFERENCES outbox(id),  -- NO ACTION; purge deletes consumptions before their outbox row
+  handler     text NOT NULL,                        -- stable registered handler name
   consumed_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (event_id, handler));
 ```
+
+Both tables are created in slice 0.3. Their access model (roles, grants, RLS) is §7.6.
+
+#### 7.3.1 Deferred foreign key `outbox.user_id → users(id)`
+
+| Question | Answer |
+|---|---|
+| When is `outbox` created? | Slice 0.3, migration `0002` (platform), before any domain table exists |
+| Why no FK in 0.3? | `users` does not exist until slice 1.1. `platform` is the base layer and must not create or know identity's tables; creating a stub `users` table in 0.3 would make platform own part of identity's schema |
+| When is the FK added? | Slice 1.1, in the **same** migration that creates `users` (identity): `ALTER TABLE outbox ADD CONSTRAINT fk_outbox_user FOREIGN KEY (user_id) REFERENCES users(id)` (`ON DELETE NO ACTION`) |
+| What if orphan rows exist then? | The `ADD CONSTRAINT` validates existing rows and the migration fails. Rows are never deleted silently; an operator removes test leftovers explicitly and re-runs. In practice no user-scoped producer exists before 1.1, and dispatched rows expire after 7 days |
+| Integrity before the FK (0.3 → 1.1) | `user_id` is never caller-supplied: `platform.publish` copies it from the active unit of work. The API role can insert only rows whose `user_id` equals the transaction's `app.user_id` (§7.6 policy). No `users` table exists, so no user-scoped events are produced except synthetic test events |
+| Integrity after the FK | Every non-NULL `outbox.user_id` references an existing user. Account deletion deletes the user's outbox rows (and their consumptions) before the user row (§13.3) |
+| Why this is not an artificial dependency | The constraint is added by identity's migration, the higher layer, which already depends on `platform`. `platform` schema and code never reference `users`. Dependency direction stays identity → platform |
+
+`event_consumptions.event_id → outbox(id)` is created with the table in 0.3 because both tables exist then.
+
+#### 7.3.2 States and dispatch
 
 | State | Meaning | Transition |
 |---|---|---|
 | `pending` | Committed with the business change; not yet turned into jobs | → `dispatched` when all handler jobs are deferred; stays `pending` with backoff on errors |
 | `dispatched` | Jobs exist (or ran) for every subscribed handler | Terminal; purged after 7 days |
-| `failed` | Dispatch failed 10 times (e.g., unknown event type, persistent queue error) | Alert; operator CLI re-queues (`eca ops outbox retry`) |
+| `failed` | Dispatch failed 10 times (e.g., unknown event type, persistent queue error) | Alert; operator CLI re-queues (`eca ops outbox retry`: `failed` → `pending`, `attempts = 0`) |
+
+There is no persisted "dispatching" state. A dispatcher claims rows by locking them (`FOR UPDATE SKIP LOCKED`) inside one transaction. A crash releases the locks and leaves the rows `pending`, so the next tick picks them up. "Stale dispatch" therefore means only: `pending` rows whose `next_attempt_at` has passed but which are not advancing (dispatcher stopped or failing). The reconciler (§7.5) and the "oldest pending > 2 min" alert cover that case.
+
+**Dispatch step** (per claimed row): resolve the handlers registered for `event_type`; for each handler, Procrastinate `defer` with `queueing_lock = lock = "<handler>:<event_id>"` (an `AlreadyEnqueued` rejection counts as success); when every handler is deferred, set `dispatched`, `dispatched_at`. A registered event type with zero handlers is marked `dispatched` directly. An unregistered event type is an error, not a skip, because a rolling deploy can briefly run a dispatcher that lacks a new type. On error: `attempts + 1`, `last_error`, `next_attempt_at = now() + min(1 s · 2^attempts + random(0–1 s), 5 min)` (§14.3); at 10 attempts → `failed`. If only some handlers were deferred before an error, the next attempt re-defers all of them; the already-deferred ones are absorbed by `queueing_lock` or `event_consumptions`. Events carry no ordering guarantee; handlers must not assume order.
 
 ### 7.4 Duplicate dispatch, crash recovery, idempotency
 
@@ -276,7 +322,20 @@ CREATE TABLE event_consumptions (
 
 Handler idempotency rule: **every handler that writes state inserts `event_consumptions` in the same transaction as its writes; if the insert conflicts, it returns immediately.** Handlers that only enqueue further work rely on natural keys (e.g., `extractions` unique key) instead.
 
-### 7.5 Source-item stage machine and reconciler
+Precise duplicate semantics (slice 0.3):
+
+- Procrastinate's `queueing_lock` rejects a second job only while the first is still queued (`todo`). A duplicate deferred while the first job is running is accepted; `lock` (same key) stops the two from running at the same time, and `event_consumptions` makes the later one a no-op.
+- The handler wrapper runs `INSERT INTO event_consumptions … ON CONFLICT DO NOTHING RETURNING event_id` as its first statement. If a concurrent transaction holds the same key, the insert waits for it; after that transaction commits, the insert returns no row and the handler returns without effects.
+- "Exactly once" means **effective exactly-once for database effects** written in the handler transaction. Effects outside the database (provider calls, Web Push) are at-least-once and need their own keys (§10).
+- Handler names are stable identities (they appear in `event_consumptions.handler` and in lock keys). Renaming a handler creates a new identity.
+
+### 7.5 Reconciler and source-item stage machine
+
+The reconciler is introduced in two steps. Neither step pretends that a later table exists.
+
+**Infrastructure reconciler (slice 0.3).** Periodic task `reconcile` (every 5 min, `schedule` queue, lock `reconcile`). It runs one dispatch pass, with the same dispatch step and `SKIP LOCKED`, over outbox rows that are `pending`, older than 1 minute and past `next_attempt_at`. This restores dispatch progress if the dispatcher loop has stopped inside a live worker. It also logs the oldest pending age and the `failed` count. It does **not** re-queue `failed` rows (operator decision, `eca ops outbox retry`), does not touch Procrastinate dead jobs (alert only), and does not read any domain table.
+
+**Source-item reconciliation (slice 1.3, when `source_items` exists).** It extends `reconcile` with the stage-SLA scan below. Because `source_items` is a user-owned business table, the scan runs per user, one `SET LOCAL app.user_id` transaction each (§7.6); the worker role has no cross-user policy on business tables.
 
 ```text
 fetched ─normalize─▶ normalized ─prefilter─▶ skipped (terminal, reason)
@@ -288,7 +347,51 @@ indexing runs from `normalized` in parallel and records chunks; it does not chan
 
 Columns on `source_items`: `stage`, `stage_attempts`, `stage_updated_at`, `next_attempt_at`, `last_error_code`.
 
-The **reconciler** (every 5 min) finds rows whose stage has not advanced past its SLA (`fetched` > 5 min, `extract_pending` > 15 min, `extracted` > 5 min) and whose `next_attempt_at` has passed, and re-enqueues the stage job with the same deterministic `queueing_lock`. It also re-dispatches outbox rows `pending` for > 1 minute. All stage jobs are idempotent, so the reconciler can run any time.
+From slice 1.3 the **reconciler** (every 5 min) also finds source items whose stage has not advanced past its SLA (`fetched` > 5 min, `extract_pending` > 15 min, `extracted` > 5 min) and whose `next_attempt_at` has passed, and re-enqueues the stage job with the same deterministic `queueing_lock`. Outbox re-dispatch of rows `pending` for > 1 minute exists from slice 0.3. All stage jobs are idempotent, so the reconciler can run any time.
+
+### 7.6 Database roles and access model
+
+Business data and delivery infrastructure are protected differently. Business tables are isolated **per user** by RLS. Infrastructure tables are isolated **per role** by grants plus role-targeted RLS policies. No authorization decision depends on `app.user_id` being unset, except fail-closed on business tables.
+
+**Roles**
+
+| Role | Used by | Attributes | Credentials |
+|---|---|---|---|
+| Migration role (`app_migrator` in hosted environments; `postgres` in local compose and CI) | `release` only | Owns all objects; BYPASSRLS (superuser locally) because data migrations span users | Release step only; never given to `api` or `worker` |
+| API role `eca_app` (`API_DB_RUNTIME_ROLE`, `API_DATABASE_URL`) | `api` | LOGIN, NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE | API deployment only |
+| Worker role `eca_worker` (`API_DB_WORKER_ROLE`, `API_WORKER_DATABASE_URL`; added in slice 0.3) | `worker` (SQLAlchemy and Procrastinate connections) | Same attributes as `eca_app` | Worker deployment only; the API process never holds them |
+| `app_readonly` | Future non-content analytics | NOBYPASSRLS; views only | Not created until a consumer exists |
+
+**Privileges and policies**
+
+| Object | Owner | `eca_app` (API) | `eca_worker` | RLS | FORCE | Policies |
+|---|---|---|---|---|---|---|
+| User-owned business tables (every table with `user_id`, from slice 1.1) | Migration role | SELECT, INSERT, UPDATE, DELETE | SELECT, INSERT, UPDATE, DELETE | Yes | Yes | `<table>_user_isolation` for all roles: `USING` and `WITH CHECK` `user_id = eca_current_user_id()` (`eca.platform.rls.user_isolation_ddl`) |
+| `outbox` | Migration role | **INSERT only** | SELECT, INSERT, UPDATE, DELETE | Yes | Yes | `outbox_api_insert` `FOR INSERT TO eca_app WITH CHECK (user_id = eca_current_user_id())`; `outbox_worker_all` `FOR ALL TO eca_worker USING (true) WITH CHECK (true)` |
+| `event_consumptions` | Migration role | **None** | SELECT, INSERT, DELETE | Yes | Yes | `event_consumptions_worker_all` `FOR ALL TO eca_worker USING (true) WITH CHECK (true)` |
+| Procrastinate tables, sequences and functions | Migration role | **None** | DML on tables, USAGE on sequences, EXECUTE on functions | No (no `user_id`; Procrastinate internals) | — | Grants only |
+| `alembic_version` | Migration role | SELECT (readiness) | SELECT | No | — | — |
+| `eca_current_user_id()` | Migration role | EXECUTE | EXECUTE | — | — | `REVOKE ALL … FROM PUBLIC` |
+
+The baseline migration grants DML on future tables to `eca_app` through default privileges. The slice 0.3 migration therefore **revokes** `eca_app`'s default grants on `outbox` (keeping INSERT), `event_consumptions` and every Procrastinate object, adds the same default privileges for `eca_worker`, and a test asserts the exact privilege matrix above. Every later migration that creates an infrastructure table states its grants explicitly.
+
+**How `SET LOCAL app.user_id` behaves.** The unit of work runs `set_config('app.user_id', <uuid>, true)` (transaction-local) as its first statement. The value comes only from the authenticated session (API) or from the event or job being processed (worker), never from request input. It disappears at commit or rollback, so a pooled connection never carries it to the next transaction (RT-15).
+
+**API requests.** Each request is one `eca_app` transaction with `app.user_id` = the session's user. Business tables return only that user's rows. On `outbox` the API can only insert, and only rows for its own `app.user_id` (a NULL or foreign `user_id` fails the `WITH CHECK`). It cannot read, update or delete any outbox row, and it has no privilege on `event_consumptions` or Procrastinate objects. No value of `app.user_id` changes this, because these limits are grants and role-targeted policies, not user predicates. The API never enqueues jobs directly: all background work starts from an outbox row.
+
+**Worker transactions.**
+
+| Component | Transaction | `app.user_id` | Sees |
+|---|---|---|---|
+| Dispatcher, infrastructure reconciler, `eca ops outbox retry` | One `eca_worker` transaction per batch | Unset | All outbox rows, through the explicit `TO eca_worker` policy. Business tables: nothing (fail closed) |
+| Event handler job | One `eca_worker` transaction per job | Set to the event's `user_id`; unset for system events (`user_id` NULL) | That user's business rows only; its own `event_consumptions` insert |
+| Per-user maintenance scans (later slices: source-item reconciliation, sweeps, purges) | One transaction per user | Set per user | One user at a time |
+
+**Processing many users safely.** Cross-user work happens only on infrastructure tables, which hold IDs and no content. Anything that touches business data runs per user, with `app.user_id` set for that transaction. Job arguments that set `app.user_id` come only from outbox rows. The API cannot write Procrastinate tables, and every outbox row's `user_id` was pinned by the insert policy (API) or by `platform.publish` (worker). A request cannot forge a job for another user. Enumerating users for per-user scans is the one cross-user read the worker needs outside infrastructure; slice 1.1 defines it as an explicit `TO eca_worker` read policy on the identity columns it needs. No other cross-user policy on business tables is allowed.
+
+**Grants and RLS together.** Grants decide which operations a role may attempt on a table. RLS decides which rows. Infrastructure tables use both: if a future migration accidentally granted `eca_app` SELECT on `outbox`, FORCE RLS without a matching policy would still return zero rows.
+
+**Residual risk.** RLS keyed on a session setting protects against missing `WHERE user_id` filters and pooled-connection leaks. It cannot stop code that runs arbitrary SQL as `eca_app`, because such code could call `set_config` itself. Mitigations: parameterized SQLAlchemy only, no SQL built from input, the planner cannot write SQL (`TECHNICAL_DESIGN.md` §17.3), and explicit `user_id` predicates in every repository query. Infrastructure isolation does not depend on this, because it uses role grants.
 
 ---
 
@@ -678,7 +781,7 @@ Foreign keys use `ON DELETE NO ACTION`. Deletion jobs remove children before par
 
 | Job | Order |
 |---|---|
-| Account deletion | Mark user `deleting` (all jobs for this user become no-ops; API returns 410) → revoke Google tokens → delete object storage objects and provider files → per module `purge_user` in order: chat → attention → retrieval → work (events, item links, evidence, items, decisions) → intelligence → meetings → communication → people → projects → ingestion → connections → identity → user row; `audit_log` keeps a content-free record |
+| Account deletion | Mark user `deleting` (all jobs for this user become no-ops; API returns 410) → revoke Google tokens → delete object storage objects and provider files → per module `purge_user` in order: chat → attention → retrieval → work (events, item links, evidence, items, decisions) → intelligence → meetings → communication → people → projects → ingestion → connections → identity → platform (the user's `event_consumptions` then `outbox` rows, required by the outbox FK, §7.3.1) → user row; `audit_log` keeps a content-free record |
 | Source purge (disconnect with purge) | Pause sync → for the connection's source items: chunks → evidence quotes redacted and evidence rows deleted where no user event references the item → AI-only items whose evidence is all from this connection deleted; user-touched items kept with `has_source_gap` → extractions → messages/meetings → source items → cursors → connection |
 | Provider deletion of one message | §9.3 |
 | Retention purge | Bodies/recordings older than policy: content columns nulled (`body_purged_at`) and objects deleted; rows, evidence quotes and facts kept |
@@ -770,7 +873,7 @@ Non-retryable: validation errors, `AuthRevoked` (connection → `needs_reauth`),
 | `prep_sections` (deterministic) | T−45 min; recomputed on relevant events | `prep:{meeting}:{version}` | Versioned |
 | `meeting_asks` (AI-11) | User opens prep view with non-empty sections | `asks:{meeting}:{version}` | Versioned |
 | `daily_briefing` (queue `events`; deterministic, no AI) | Before work start, active users only | `brief:{user}:{date}` | One per user-day |
-| `reconcile` | Every 5 min | `reconcile` | Re-enqueue only |
+| `reconcile` | Every 5 min | `reconcile` | Re-enqueue only (slice 0.3: outbox re-dispatch; slice 1.3 adds source-item stages, §7.5) |
 | `outbox_dispatch` | Worker loop, every 1 s | Row-level `SKIP LOCKED` | §7.4 |
 | `retention_purge` | Nightly | `retention` | Batched, idempotent |
 | `delete_account`, `purge_source` | User request | `delete:{user}` / `purge:{conn}` | Resumable |
@@ -930,7 +1033,7 @@ Per user, enforced in the API process (in-memory token buckets; with ≤ 2 API i
 - `TEXT` for strings; enumerations as `TEXT` + `CHECK`.
 - Mutable entity tables: `id, created_at, updated_at, deleted_at` (+ `version` where optimistic concurrency applies); `updated_at` by trigger; partial indexes `WHERE deleted_at IS NULL`. Append-only tables (`context_events`, `evidence`, `extractions` status aside, `ai_calls`, `audit_log`, `outbox`, `event_consumptions`, `feedback_events`) have `created_at` only.
 - **Foreign keys** (`ON DELETE NO ACTION`, no cascades) on: every `user_id → users`; provenance (`extractions.source_item_id`, `evidence.source_item_id`, `evidence.extraction_id`, `item_evidence.evidence_id`, `context_events.evidence_id`, `work_items.reported_status_evidence_id`); parent–child (`messages → source_items/conversations`, `message_participants → messages/persons`, `transcript_segments → recordings`, `meeting_participants → meetings/persons`, `chunks → source_items`); entity references on items (`owner/counterparty/requester → persons`, `project_id → projects`, `merged_into_id → same table`). Polymorphic references (`context_events.entity_id`, `item_evidence.item_id`, `entity_links`) are validated in the `work` service.
-- Row-level security on every table with `user_id`: `USING (user_id = current_setting('app.user_id', true)::uuid)`; the UoW runs `SET LOCAL app.user_id` per transaction; an unset variable yields no rows (fail closed). Cross-user maintenance jobs iterate users and set the variable per user transaction. Only the migration role bypasses RLS.
+- Row-level security (ENABLE + FORCE) on every user-owned business table: `USING`/`WITH CHECK (user_id = eca_current_user_id())`, where `eca_current_user_id()` reads `current_setting('app.user_id', true)`; the UoW runs `SET LOCAL app.user_id` (as `set_config(…, true)`) per transaction; an unset variable yields no rows (fail closed). Cross-user maintenance jobs iterate users and set the variable per user transaction. Infrastructure tables (`outbox`, `event_consumptions`, Procrastinate objects) are isolated per role by grants and role-targeted policies, not by `app.user_id` (§7.6). Only the migration role bypasses RLS.
 - **Provenance columns** (`AI_PIPELINE.md` §5.1) on every AI-derived row or column group: `extraction_id` (FK to `extractions`, null for non-LLM methods), `extraction_method` (`llm`, `llm_adjudicated`, `rule`, `deterministic`, `embedding_match`, `transcription`), `model` (null for non-LLM), `derived_at`, `confidence`, `confidence_band`; evidence via `evidence`/`item_evidence` (items, decisions) or `covered_source_ids uuid[]` (summaries). Column groups use a prefix where a table mixes classes: `messages.triage_*`, `conversations.summary_*`, `meetings.summary_*`, `persons.role_*`, `meeting_participants.mapping_*`. Per-change provenance lives in `context_events.extraction_id` and `payload`. Inserts without complete provenance are rejected by the `work`/owning service (tested by `AI_EVALUATION.md` E14).
 
 ### 17.2 Core DDL (abridged)
@@ -1078,7 +1181,7 @@ CREATE INDEX ix_chunks_persons ON chunks USING gin (person_ids);
 | Item timelines | `ix_ce_entity`, `item_evidence` PK |
 | Topic discovery | `ix_chunks_hnsw`, `ix_chunks_fts`, `ix_chunks_user_time` |
 | Project hint match | `ix_wi_hint_trgm` |
-| Reconciler | `ix_source_items_stage` |
+| Reconciler: outbox re-dispatch (slice 0.3) / source-item stage scan (slice 1.3) | `ix_outbox_pending` / `ix_source_items_stage` |
 | Reminder sweep | `ix_reminders_due` |
 | Outbox dispatch | `ix_outbox_pending` |
 
@@ -1171,7 +1274,7 @@ Core tables contain no provider-specific columns; provider IDs live only in `sou
 
 | ID | Scenario | Assertion |
 |---|---|---|
-| RT-01 | Crash after source transaction, before job dispatch (kill dispatcher after the sync commit) | After restart the event is dispatched; the message is normalized, extracted and applied exactly once |
+| RT-01 | Crash after source transaction, before job dispatch (kill dispatcher after the sync commit) | After restart the event is dispatched; the message is normalized, extracted and applied exactly once. Built in two levels (below); green for Phase 1 exit only at pipeline level |
 | RT-02 | Crash after AI extraction commit, before apply | Apply runs via job or reconciler; one `extractions` row; AI call count = 1; state equals the no-crash run |
 | RT-02b | Crash after AI response, before extraction commit | At most one extra AI call; one extraction row; final state identical |
 | RT-03 | Two workers apply extractions describing the same commitment (meeting + email) concurrently | One work item with two evidence rows; no deadlock |
@@ -1187,7 +1290,16 @@ Core tables contain no provider-specific columns; provider IDs live only in `sou
 | RT-12 | Extract/apply code paths attempt a write to a SOURCE table (test-mode audit trigger) | Write rejected; test fails if any such write occurs |
 | RT-13 | R2 rebuild after user corrections | All user-authored values and user-touched item IDs preserved |
 | RT-14 | R2 rebuild equivalence | Rebuilt AI-derived state equals pre-rebuild state (excluding IDs of AI-only items) |
-| RT-15 | RLS with `app.user_id` unset and set to another user | Zero rows returned; writes rejected |
+| RT-15 | RLS with `app.user_id` unset and set to another user; from slice 0.3 also the role model of §7.6 | Zero rows returned; writes rejected; context does not leak across pooled transactions. From 0.3: `eca_app` cannot read, update or delete any `outbox` row, cannot insert one for another user or with NULL `user_id`, and has no access to `event_consumptions` or Procrastinate objects, whatever `app.user_id` is; `eca_worker` with `app.user_id` unset sees zero business rows; privilege matrix equals §7.6 |
+
+**RT-01 levels.** The eventual assertion above does not change. It is built in two levels:
+
+| Level | Slice | Setup | Proves | Does not prove |
+|---|---|---|---|---|
+| Infrastructure | 0.3 | Synthetic event type and synthetic handlers. Each handler appends to a test-only effect table **without** a unique constraint, so any duplicate effect is visible. Real outbox, dispatcher, Procrastinate worker, `event_consumptions`, crash points (`IMPLEMENTATION_PLAN.md` slice 0.3) | Outbox persistence atomic with the business commit (and absent after rollback); dispatch after a crash; handler registration; duplicate-delivery safety; consumption dedupe; crash and retry recovery; effective exactly-once database effects per handler | Gmail normalization, email or AI extraction, apply, the real message lifecycle, `source_items` processing, production email correctness |
+| Pipeline | 1.3 (sync → normalize, fake connector) and 1.4 (normalize → extract → apply, recorded AI responses) | `world_v1` messages through the real stages | The full assertion: normalized, extracted and applied exactly once; AI call count 1 | — |
+
+RT-05 is defined on infrastructure only and is complete at slice 0.3; it keeps running unchanged once real handlers exist. RT-02, RT-02b, RT-04, RT-06 and RT-07 cover the neighbouring pipeline crash and replay cases.
 
 ---
 
