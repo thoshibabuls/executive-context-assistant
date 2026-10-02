@@ -198,3 +198,16 @@ async def get_cursor(uow: UnitOfWork, *, connection_id: UUID, resource: str) -> 
         )
     ).one_or_none()
     return None if row is None else CursorState(row.cursor, row.import_page_token, row.import_state)
+
+
+async def cursor_obtained_at(
+    uow: UnitOfWork, *, connection_id: UUID, resource: str
+) -> datetime.datetime | None:
+    row = (
+        await uow.session.execute(
+            select(sync_cursors_table.c.cursor_obtained_at).where(
+                sync_cursors_table.c.connection_id == connection_id, sync_cursors_table.c.resource == resource
+            )
+        )
+    ).one_or_none()
+    return None if row is None else row.cursor_obtained_at

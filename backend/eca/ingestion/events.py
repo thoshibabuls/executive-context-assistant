@@ -11,6 +11,7 @@ from eca.platform.events import register_event
 SOURCE_ITEM_STORED = "SourceItemStored"
 SOURCE_ITEM_STAGE_DUE = "SourceItemStageDue"
 SYNC_REQUESTED = "SyncRequested"
+SOURCE_ITEM_DELETED = "SourceItemDeleted"
 
 
 class SourceItemStored(BaseModel):
@@ -27,6 +28,14 @@ class SourceItemStageDue(BaseModel):
     stage: str
 
 
+class SourceItemDeleted(BaseModel):
+    """The provider permanently deleted the item, or a purge removed it (§9.3)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    source_item_id: UUID
+    kind: str
+
+
 class SyncRequested(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     connection_id: UUID
@@ -37,3 +46,4 @@ class SyncRequested(BaseModel):
 register_event(SOURCE_ITEM_STORED, SourceItemStored)
 register_event(SOURCE_ITEM_STAGE_DUE, SourceItemStageDue)
 register_event(SYNC_REQUESTED, SyncRequested)
+register_event(SOURCE_ITEM_DELETED, SourceItemDeleted)

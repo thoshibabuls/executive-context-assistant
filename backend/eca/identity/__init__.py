@@ -6,7 +6,14 @@ Owns (single writer, BACKEND_DESIGN.md §5.1): users, auth_sessions, user_prefer
 
 from eca.identity import events as _events  # registers event types
 from eca.identity.events import USER_CREATED, USER_DELETION_REQUESTED, UserCreated, UserDeletionRequested
-from eca.identity.oauth_state import ConsumedState, NewState, consume_state, create_state, pkce_challenge
+from eca.identity.oauth_state import (
+    ConsumedState,
+    NewState,
+    consume_state,
+    create_state,
+    discard_user_states,
+    pkce_challenge,
+)
 from eca.identity.oidc import (
     SIGNIN_SCOPES,
     GoogleIdentity,
@@ -16,6 +23,7 @@ from eca.identity.oidc import (
     exchange_code,
     verify_id_token,
 )
+from eca.identity.purge import delete_user_row, purge_sessions
 from eca.identity.service import (
     UserProfile,
     UserSettings,
@@ -61,6 +69,8 @@ __all__ = [
     "create_session",
     "create_state",
     "create_user",
+    "delete_user_row",
+    "discard_user_states",
     "exchange_code",
     "find_signin_user",
     "get_profile",
@@ -69,6 +79,7 @@ __all__ = [
     "list_active_user_ids",
     "load_session",
     "pkce_challenge",
+    "purge_sessions",
     "request_account_deletion",
     "revoke_all_sessions",
     "revoke_session",

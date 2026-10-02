@@ -18,6 +18,7 @@ from eca.work.pipeline import (
     ExtractionRetry,
     extract_source_item,
 )
+from eca.work.purge import REDACTED, purge_sources, purge_user, sources_still_referenced
 from eca.work.recompute import RecomputeReport, reapply_all, refold_all
 from eca.work.service import (
     AppendResult,
@@ -42,6 +43,7 @@ __all__ = [
     "ADJUDICATION_NEEDED",
     "APPLY_HANDLER",
     "EXTRACT_HANDLER",
+    "REDACTED",
     "WORK_ITEM_CHANGED",
     "AdjudicationNeeded",
     "AppendResult",
@@ -71,11 +73,14 @@ __all__ = [
     "get_item",
     "list_items",
     "map_statement",
+    "purge_sources",
+    "purge_user",
     "reapply_all",
     "refold_all",
     "reject",
     "resolve_due",
     "set_lifecycle",
+    "sources_still_referenced",
     "timeline",
     "user_edit",
 ]

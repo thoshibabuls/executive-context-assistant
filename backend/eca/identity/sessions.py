@@ -19,6 +19,7 @@ from sqlalchemy import Column, DateTime, MetaData, Table, Text, insert, select, 
 from sqlalchemy.dialects.postgresql import BYTEA
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
+from eca.identity.models import users_table
 from eca.platform.errors import PermissionDenied
 from eca.platform.ids import uuid7
 from eca.platform.uow import UnitOfWork
@@ -55,6 +56,10 @@ class SessionInfo:
     user_id: UUID
     csrf_hash: bytes
     reauth_at: datetime.datetime
+    user_status: str = "active"
+
+
+LAST_SEEN_RESOLUTION = datetime.timedelta(minutes=5)
 
 
 def token_hash(token: str) -> bytes:
@@ -96,19 +101,23 @@ async def session_user_id(uow: UnitOfWork, token: str) -> UUID | None:
 
 
 async def load_session(uow: UnitOfWork, token: str, *, now: datetime.datetime) -> SessionInfo | None:
-    """In the user's unit of work: the active session row for this token."""
-    t = auth_sessions_table
+    """In the user's unit of work: the active session row for this token and the user's status.
+
+    ``last_seen_at`` is written at most every few minutes, not on every request.
+    """
+    t, u = auth_sessions_table, users_table
     row = (
         await uow.session.execute(
-            select(t.c.id, t.c.user_id, t.c.csrf_hash, t.c.reauth_at).where(
-                t.c.session_hash == token_hash(token), t.c.revoked_at.is_(None), t.c.expires_at > now
-            )
+            select(t.c.id, t.c.user_id, t.c.csrf_hash, t.c.reauth_at, t.c.last_seen_at, u.c.status)
+            .join(u, u.c.id == t.c.user_id)
+            .where(t.c.session_hash == token_hash(token), t.c.revoked_at.is_(None), t.c.expires_at > now)
         )
     ).one_or_none()
     if row is None:
         return None
-    await uow.session.execute(update(t).where(t.c.id == row.id).values(last_seen_at=now))
-    return SessionInfo(row.id, row.user_id, bytes(row.csrf_hash), row.reauth_at)
+    if row.last_seen_at is None or now - row.last_seen_at > LAST_SEEN_RESOLUTION:
+        await uow.session.execute(update(t).where(t.c.id == row.id).values(last_seen_at=now))
+    return SessionInfo(row.id, row.user_id, bytes(row.csrf_hash), row.reauth_at, row.status)
 
 
 def check_csrf(info: SessionInfo, header_value: str | None) -> None:

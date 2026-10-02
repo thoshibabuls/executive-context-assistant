@@ -44,6 +44,7 @@ messages_table = Table(
     Column("body_text", Text),
     Column("body_clean", Text),
     Column("snippet", Text),
+    Column("body_purged_at", DateTime(timezone=True)),
     Column("is_bulk", Boolean, nullable=False),
     Column("prefilter_reason", Text),
     Column("triage", JSONB),

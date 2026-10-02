@@ -177,8 +177,7 @@ async def normalize_source_item(uow: UnitOfWork, source_item_id: UUID) -> Normal
     if item.stage != "fetched":
         return NormalizeResult(message_id=None, stage=item.stage, reason="not_fetched")
     if item.kind != "message":
-        await set_stage(uow, item.id, expected=("fetched",), new="normalized")
-        return NormalizeResult(message_id=None, stage="normalized", reason="not_a_message")
+        return NormalizeResult(message_id=None, stage=item.stage, reason="not_a_message")  # meetings owns it
     content = _content(item)
     m = messages_table
     rfc822 = content.get("rfc822_id")

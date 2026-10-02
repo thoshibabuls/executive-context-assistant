@@ -75,6 +75,8 @@ async def create_state(
     scopes: tuple[str, ...] = (),
     redirect_to: str | None = None,
 ) -> NewState:
+    # Expired states are removed here (API role only, §7.6): the table stays small without a job.
+    await uow.session.execute(_EXPIRE_SQL, {"cutoff": now - STATE_TTL})
     state = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(64)
     nonce = secrets.token_urlsafe(24)
@@ -91,6 +93,14 @@ async def create_state(
         )
     )
     return NewState(state=state, code_verifier=verifier, code_challenge=pkce_challenge(verifier), nonce=nonce)
+
+
+_EXPIRE_SQL = text("DELETE FROM oauth_states WHERE expires_at < :cutoff")
+
+
+async def discard_user_states(uow: UnitOfWork, user_id: UUID) -> None:
+    """Account deletion: states bound to the user go before the user row (FK, API role only)."""
+    await uow.session.execute(text("DELETE FROM oauth_states WHERE user_id = :u"), {"u": user_id})
 
 
 _CONSUME_SQL = text(

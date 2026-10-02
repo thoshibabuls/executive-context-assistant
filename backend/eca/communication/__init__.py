@@ -8,6 +8,7 @@ from eca.communication import tasks as _tasks  # registers handlers
 from eca.communication.cleaning import clean_body, html_to_text, split_forwarded
 from eca.communication.events import MESSAGE_NORMALIZED, MessageNormalized
 from eca.communication.prefilter import PrefilterDecision, PrefilterInput, decide
+from eca.communication.purge import purge_bodies, purge_sources, purge_user
 from eca.communication.service import (
     MessageView,
     NormalizeResult,
@@ -40,6 +41,9 @@ __all__ = [
     "mark_conversation_handled",
     "normalize_source_item",
     "participants_of_conversation",
+    "purge_bodies",
+    "purge_sources",
+    "purge_user",
     "recompute_reply_state",
     "set_triage_projection",
     "split_forwarded",

@@ -68,6 +68,7 @@ from eca.intelligence.provider.types import (
     UnknownRole,
     Usage,
 )
+from eca.intelligence.purge import delete_extractions, extraction_ids_for_sources, purge_old_calls, purge_user
 from eca.intelligence.tasks import COST_ROLLUP_TASK, periodic_tasks
 
 __all__ = [
@@ -128,7 +129,9 @@ __all__ = [
     "claim",
     "classify",
     "confidence_band",
+    "delete_extractions",
     "ensure_completed_event",
+    "extraction_ids_for_sources",
     "get_extraction",
     "input_hash",
     "latest_pending_for_source",
@@ -137,6 +140,8 @@ __all__ = [
     "mark_apply_failed",
     "next_background_attempt",
     "periodic_tasks",
+    "purge_old_calls",
+    "purge_user",
     "render_email_prompt",
     "reset_apply",
     "rollup_costs",

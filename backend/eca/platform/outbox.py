@@ -8,10 +8,11 @@ RETURNING, no ON CONFLICT, nothing read back. The lifecycle columns come from DD
 
 from __future__ import annotations
 
+import datetime
 from uuid import UUID
 
 import structlog
-from sqlalchemy import Column, DateTime, Integer, MetaData, Table, Text, insert, text
+from sqlalchemy import Column, DateTime, Integer, MetaData, Table, Text, delete, insert, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
@@ -94,3 +95,30 @@ async def retry_failed(uow: UnitOfWork, *, event_id: UUID | None = None) -> int:
     result = await uow.session.execute(_RETRY_FAILED_SQL, {"event_id": event_id})
     count: int = result.rowcount  # type: ignore[attr-defined]
     return count
+
+
+_PURGE_USER_CONSUMPTIONS_SQL = text(
+    "DELETE FROM event_consumptions WHERE event_id IN (SELECT id FROM outbox WHERE user_id = :user_id)"
+)
+_PURGE_DISPATCHED_CONSUMPTIONS_SQL = text(
+    """
+    DELETE FROM event_consumptions
+     WHERE event_id IN (SELECT id FROM outbox WHERE status = 'dispatched' AND dispatched_at < :cutoff)
+    """
+)
+
+
+async def purge_user_events(uow: UnitOfWork, user_id: UUID) -> None:
+    """Account deletion, last platform step (§13.3): consumptions, then the user's outbox rows."""
+    await uow.session.execute(_PURGE_USER_CONSUMPTIONS_SQL, {"user_id": user_id})
+    await uow.session.execute(delete(outbox_table).where(outbox_table.c.user_id == user_id))
+
+
+async def purge_dispatched(uow: UnitOfWork, *, cutoff: datetime.datetime) -> int:
+    """Retention: dispatched events (and their consumptions) older than ``cutoff``."""
+    await uow.session.execute(_PURGE_DISPATCHED_CONSUMPTIONS_SQL, {"cutoff": cutoff})
+    o = outbox_table
+    result = await uow.session.execute(
+        delete(o).where(o.c.status == "dispatched", o.c.dispatched_at < cutoff)
+    )
+    return int(result.rowcount)  # type: ignore[attr-defined]

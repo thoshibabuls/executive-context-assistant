@@ -1,9 +1,9 @@
 """Connector registry for the production worker (BACKEND_DESIGN.md §20).
 
-Gmail (slice 1.5) is registered when Google OAuth credentials and the token key are configured:
-each connector gets an access-token provider that refreshes through ``connections`` in its own
-short transaction for the connection's user (``needs_reauth`` on ``invalid_grant``). Tests and
-evaluation runners build their own registry with the fake connectors.
+Gmail (slice 1.5) and Google Calendar (slice 1.6) are registered when Google OAuth credentials
+and the token key are configured: each connector gets an access-token provider that refreshes through
+``connections`` in its own short transaction for the user (``needs_reauth`` on ``invalid_grant``).
+Tests and evaluation runners build their own registry with the fake connectors.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from __future__ import annotations
 import httpx
 
 from eca.connections import GoogleOAuthConfig, TokenCrypto, access_token
-from eca.connectors import ConnectionInfo, ConnectorRegistry, GmailConnector
+from eca.connectors import ConnectionInfo, ConnectorRegistry, GmailConnector, GoogleCalendarConnector
 from eca.platform.config import Settings
 from eca.platform.uow import UnitOfWorkFactory
 
@@ -44,5 +44,15 @@ def build_connector_registry(
 
         return GmailConnector(http, token, account_email=info.account_email)
 
+    def calendar(info: ConnectionInfo) -> GoogleCalendarConnector:
+        async def token() -> str:
+            async with uow_factory(user_id=info.user_id) as uow:
+                return await access_token(
+                    uow, cfg, crypto, http, connection_id=info.connection_id, capability="calendar"
+                )
+
+        return GoogleCalendarConnector(http, token)
+
     registry.register_mail("google", gmail)
+    registry.register_calendar("google", calendar)
     return registry

@@ -26,6 +26,7 @@ from eca.identity import (
     create_session,
     create_state,
     create_user,
+    discard_user_states,
     exchange_code,
     find_signin_user,
     get_profile,
@@ -40,7 +41,7 @@ from eca.identity import (
 from eca.people import create_self_person
 from eca.platform.audit import record_audit
 from eca.platform.config import Settings, get_settings
-from eca.platform.errors import PermissionDenied, ValidationFailed
+from eca.platform.errors import Gone, PermissionDenied, ValidationFailed
 from eca.platform.ids import uuid7
 from eca.platform.uow import UnitOfWorkFactory
 
@@ -97,6 +98,8 @@ async def current_user(
         info = await load_session(uow, token, now=_now())
     if info is None:
         raise PermissionDenied("session expired or revoked")
+    if info.user_status != "active":
+        raise Gone("this account is being deleted")
     if request.method in UNSAFE:
         check_csrf(info, request.headers.get("x-csrf-token"))
     return CurrentUser(user_id=info.user_id, session_id=info.session_id, reauth_at=info.reauth_at)
@@ -246,12 +249,13 @@ async def delete_me(
     factory: Annotated[UnitOfWorkFactory, Depends(uow_factory)],
     settings: Annotated[Settings, Depends(settings_dep)],
 ) -> dict[str, str]:
-    """Records the deletion request (the deletion job is slice 1.9). Needs a recent sign-in."""
+    """Records the deletion request; the ``privacy`` job deletes the account. Needs a recent sign-in."""
     now = _now()
     if now - user.reauth_at > datetime.timedelta(minutes=settings.reauth_max_age_minutes):
         raise PermissionDenied("sign in again to delete your account", details={"reason": "reauth_required"})
     async with factory(user_id=user.user_id) as uow:
         job_id = await request_account_deletion(uow)
         await revoke_all_sessions(uow, now=now)
+        await discard_user_states(uow, user.user_id)
         await record_audit(uow, "account_deletion_requested", target_type="deletion_job", target_id=job_id)
     return {"deletion_job_id": str(job_id), "status": "pending"}

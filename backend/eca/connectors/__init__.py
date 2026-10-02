@@ -31,6 +31,7 @@ from eca.connectors.google_auth import (
     refresh_access_token,
     revoke_token,
 )
+from eca.connectors.google_calendar import GoogleCalendarConnector, normalize_event, query_fingerprint
 from eca.connectors.protocols import (
     CalendarConnector,
     ConnectionInfo,
@@ -54,6 +55,7 @@ __all__ = [
     "FakeFeed",
     "FakeMailConnector",
     "GmailConnector",
+    "GoogleCalendarConnector",
     "MailConnector",
     "NormalizedAttendee",
     "NormalizedEvent",
@@ -65,7 +67,9 @@ __all__ = [
     "categories_from_labels",
     "feed_of",
     "load_eml_dir",
+    "normalize_event",
     "parse_eml",
+    "query_fingerprint",
     "refresh_access_token",
     "revoke_token",
 ]

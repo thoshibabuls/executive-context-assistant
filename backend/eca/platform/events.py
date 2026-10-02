@@ -120,6 +120,9 @@ class HandlerSpec:
     queue: str
     func: HandlerFunc
     mode: HandlerMode = "consumption"
+    # Account deletion (§13.3): jobs for a user who is ``deleting`` (or gone) are no-ops, except
+    # the deletion job itself.
+    runs_while_deleting: bool = False
 
 
 class EventRegistry:
@@ -137,7 +140,13 @@ class EventRegistry:
         self._payload_models[event_type] = payload_model
 
     def handles(
-        self, event_type: str, *, name: str, queue: str = "events", mode: HandlerMode = "consumption"
+        self,
+        event_type: str,
+        *,
+        name: str,
+        queue: str = "events",
+        mode: HandlerMode = "consumption",
+        runs_while_deleting: bool = False,
     ) -> Callable[[HandlerFunc], HandlerFunc]:
         if not _HANDLER_NAME.fullmatch(name):
             raise ValueError(f"Invalid handler name: {name!r}")
@@ -150,7 +159,12 @@ class EventRegistry:
             if name in self._handlers:
                 raise ValueError(f"Handler name already registered: {name!r}")
             self._handlers[name] = HandlerSpec(
-                name=name, event_type=event_type, queue=queue, func=func, mode=mode
+                name=name,
+                event_type=event_type,
+                queue=queue,
+                func=func,
+                mode=mode,
+                runs_while_deleting=runs_while_deleting,
             )
             return func
 

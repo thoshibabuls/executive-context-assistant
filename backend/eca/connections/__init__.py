@@ -16,11 +16,13 @@ from eca.connections.google import (
     list_connections,
     start_connect,
 )
+from eca.connections.purge import purge_connection, purge_user, revoke_all_tokens
 from eca.connections.service import (
     CursorState,
     acquire_lease,
     advance_cursor,
     create_connection,
+    cursor_obtained_at,
     get_connection,
     get_cursor,
     list_active_connections,
@@ -43,13 +45,17 @@ __all__ = [
     "capabilities_for",
     "complete_connect",
     "create_connection",
+    "cursor_obtained_at",
     "disconnect",
     "get_connection",
     "get_cursor",
     "list_active_connections",
     "list_connections",
+    "purge_connection",
+    "purge_user",
     "release_after_failure",
     "reset_cursor",
+    "revoke_all_tokens",
     "save_page_token",
     "start_connect",
 ]

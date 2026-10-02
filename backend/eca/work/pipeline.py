@@ -16,7 +16,9 @@ import structlog
 
 from eca.communication import MESSAGE_NORMALIZED, MessageNormalized, get_message_view
 from eca.ingestion import (
+    SOURCE_ITEM_DELETED,
     SOURCE_ITEM_STAGE_DUE,
+    SourceItemDeleted,
     SourceItemStageDue,
     get_source_item,
     set_stage,
@@ -46,6 +48,7 @@ from eca.platform.uow import UnitOfWorkFactory
 from eca.work.apply import apply_extraction
 from eca.work.candidates import build_candidates
 from eca.work.events import ADJUDICATION_NEEDED, AdjudicationNeeded
+from eca.work.purge import on_source_deleted
 
 log = structlog.get_logger("eca.work.pipeline")
 
@@ -202,3 +205,11 @@ async def on_adjudication_needed(ctx: HandlerContext) -> None:
     )
     outcome = await run_adjudication(client, inp, quote, user_id=ctx.envelope.user_id)
     log.info("adjudication_result", ok=outcome.ok, error=outcome.error_code)
+
+
+@handles(SOURCE_ITEM_DELETED, name="work.source_deleted", queue="apply")
+async def on_source_item_deleted(ctx: HandlerContext) -> None:
+    """§9.3: redact evidence, archive or flag items; no AI call."""
+    payload = ctx.payload
+    assert isinstance(payload, SourceItemDeleted)
+    await on_source_deleted(ctx.tx, payload.source_item_id, now=_now(ctx))

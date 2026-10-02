@@ -13,8 +13,11 @@ gaps, and the unique key turns re-fetched items into no-ops (RT-06).
 from __future__ import annotations
 
 import datetime
-from collections.abc import Sequence
+import hashlib
+import json
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -22,18 +25,22 @@ from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from eca.connections import (
+    CursorState,
     acquire_lease,
     advance_cursor,
+    cursor_obtained_at,
     get_connection,
     release_after_failure,
     reset_cursor,
     save_page_token,
 )
-from eca.connectors import ConnectionInfo, ConnectorRegistry, NormalizedMessage
+from eca.connectors import ConnectionInfo, ConnectorRegistry, NormalizedMessage, SyncBatch
 from eca.identity import list_active_user_ids
 from eca.ingestion.events import (
+    SOURCE_ITEM_DELETED,
     SOURCE_ITEM_STAGE_DUE,
     SOURCE_ITEM_STORED,
+    SourceItemDeleted,
     SourceItemStageDue,
     SourceItemStored,
 )
@@ -48,6 +55,7 @@ from eca.platform.uow import UnitOfWork, UnitOfWorkFactory
 log = structlog.get_logger("eca.ingestion")
 
 MAIL_RESOURCE = "mail"
+CALENDAR_RESOURCE = "calendar"
 
 
 @dataclass(frozen=True)
@@ -130,42 +138,53 @@ async def store_messages(uow: UnitOfWork, info: ConnectionInfo, messages: Sequen
     return stored
 
 
-async def sync_mail(
+PageFetcher = Callable[[str | None, str | None], Awaitable[SyncBatch[Any]]]
+PageStorer = Callable[[UnitOfWork, ConnectionInfo, SyncBatch[Any]], Awaitable[int]]
+
+
+async def _run_sync(
     uow_factory: UnitOfWorkFactory,
-    connectors: ConnectorRegistry,
     *,
     user_id: UUID,
     connection_id: UUID,
-    now: datetime.datetime,
+    resource: str,
     owner: str,
+    now: datetime.datetime,
+    fetch: Callable[[ConnectionInfo], PageFetcher],
+    store: PageStorer,
+    max_cursor_age: datetime.timedelta | None = None,
 ) -> SyncReport:
+    """Lease → pages (each committed with its items and page token) → cursor (§11.1)."""
     async with uow_factory(user_id=user_id) as uow:
         info = await get_connection(uow, connection_id)
-        state = await acquire_lease(
-            uow, connection_id=connection_id, resource=MAIL_RESOURCE, owner=owner, now=now
-        )
+        state = await acquire_lease(uow, connection_id=connection_id, resource=resource, owner=owner, now=now)
+        if state is not None and max_cursor_age is not None and state.cursor is not None:
+            obtained = await cursor_obtained_at(uow, connection_id=connection_id, resource=resource)
+            if obtained is not None and now - obtained > max_cursor_age:
+                await reset_cursor(uow, connection_id=connection_id, resource=resource, owner=owner)
+                state = CursorState(cursor=None, page_token=None, import_state="none")
     if state is None:
-        log.info("sync_skipped_lease_held", connection_id=str(connection_id))
+        log.info("sync_skipped_lease_held", connection_id=str(connection_id), resource=resource)
         return SyncReport(ran=False)
-    connector = connectors.mail(info)
+    page = fetch(info)
     cursor, token = state.cursor, state.page_token
     pages = fetched = stored = 0
     try:
         while True:
             try:
-                batch = await connector.list_messages(cursor=cursor, page_token=token, now=now)
+                batch = await page(cursor, token)
             except CursorExpired:
-                log.warning("sync_cursor_expired", connection_id=str(connection_id))
+                log.warning("sync_cursor_expired", connection_id=str(connection_id), resource=resource)
                 async with uow_factory(user_id=user_id) as uow:
-                    await reset_cursor(uow, connection_id=connection_id, resource=MAIL_RESOURCE, owner=owner)
+                    await reset_cursor(uow, connection_id=connection_id, resource=resource, owner=owner)
                 cursor = token = None
                 continue
             async with uow_factory(user_id=user_id) as uow:
-                stored += await store_messages(uow, info, batch.items)
+                stored += await store(uow, info, batch)
                 await save_page_token(
                     uow,
                     connection_id=connection_id,
-                    resource=MAIL_RESOURCE,
+                    resource=resource,
                     owner=owner,
                     page_token=batch.next_page_token,
                     processed=len(batch.items),
@@ -179,17 +198,210 @@ async def sync_mail(
             await advance_cursor(
                 uow,
                 connection_id=connection_id,
-                resource=MAIL_RESOURCE,
+                resource=resource,
                 owner=owner,
                 cursor=batch.high_water_cursor,
                 now=now,
             )
     except BaseException:
         async with uow_factory(user_id=user_id) as uow:
-            await release_after_failure(uow, connection_id=connection_id, resource=MAIL_RESOURCE, owner=owner)
+            await release_after_failure(uow, connection_id=connection_id, resource=resource, owner=owner)
         raise
-    log.info("sync_completed", connection_id=str(connection_id), pages=pages, fetched=fetched, stored=stored)
+    log.info(
+        "sync_completed",
+        connection_id=str(connection_id),
+        resource=resource,
+        pages=pages,
+        fetched=fetched,
+        stored=stored,
+    )
     return SyncReport(ran=True, pages=pages, fetched=fetched, stored=stored, cursor=batch.high_water_cursor)
+
+
+async def _store_mail_page(uow: UnitOfWork, info: ConnectionInfo, batch: SyncBatch[Any]) -> int:
+    stored = await store_messages(uow, info, batch.items)
+    if batch.deleted_external_ids:
+        await mark_deleted(uow, info, kind="message", external_ids=batch.deleted_external_ids)
+    return stored
+
+
+async def sync_mail(
+    uow_factory: UnitOfWorkFactory,
+    connectors: ConnectorRegistry,
+    *,
+    user_id: UUID,
+    connection_id: UUID,
+    now: datetime.datetime,
+    owner: str,
+) -> SyncReport:
+    def fetch(info: ConnectionInfo) -> PageFetcher:
+        connector = connectors.mail(info)
+
+        async def page(cursor: str | None, token: str | None) -> SyncBatch[Any]:
+            return await connector.list_messages(cursor=cursor, page_token=token, now=now)
+
+        return page
+
+    return await _run_sync(
+        uow_factory,
+        user_id=user_id,
+        connection_id=connection_id,
+        resource=MAIL_RESOURCE,
+        owner=owner,
+        now=now,
+        fetch=fetch,
+        store=_store_mail_page,
+    )
+
+
+async def sync_calendar(
+    uow_factory: UnitOfWorkFactory,
+    connectors: ConnectorRegistry,
+    *,
+    user_id: UUID,
+    connection_id: UUID,
+    now: datetime.datetime,
+    owner: str,
+) -> SyncReport:
+    """Calendar sync (§11.3); a cursor older than a day is replaced by a full window sync."""
+
+    def fetch(info: ConnectionInfo) -> PageFetcher:
+        connector = connectors.calendar(info)
+
+        async def page(cursor: str | None, token: str | None) -> SyncBatch[Any]:
+            return await connector.list_events(cursor=cursor, page_token=token, now=now)
+
+        return page
+
+    return await _run_sync(
+        uow_factory,
+        user_id=user_id,
+        connection_id=connection_id,
+        resource=CALENDAR_RESOURCE,
+        owner=owner,
+        now=now,
+        fetch=fetch,
+        store=store_events,
+        max_cursor_age=datetime.timedelta(days=1),
+    )
+
+
+async def store_events(uow: UnitOfWork, info: ConnectionInfo, batch: SyncBatch[Any]) -> int:
+    """Upsert calendar events; unchanged ``etag`` → skip; changed → content updated, re-staged."""
+    t = source_items_table
+    stored = 0
+    for ev in batch.items:
+        content = event_content(ev)
+        digest = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).digest()
+        existing = (
+            await uow.session.execute(
+                select(t.c.id, t.c.provider_version).where(
+                    t.c.connection_id == info.connection_id,
+                    t.c.kind == "calendar_event",
+                    t.c.external_id == ev.external_id,
+                )
+            )
+        ).one_or_none()
+        if existing is not None and existing.provider_version == ev.provider_version:
+            continue
+        item_id = existing.id if existing is not None else uuid7()
+        if existing is None:
+            await uow.session.execute(
+                insert(t).values(
+                    id=item_id,
+                    user_id=uow.user_id,
+                    connection_id=info.connection_id,
+                    kind="calendar_event",
+                    provider=info.provider,
+                    external_id=ev.external_id,
+                    external_thread_id=ev.series_external_id,
+                    content_hash=digest,
+                    provider_version=ev.provider_version,
+                    categories=[],
+                    occurred_at=ev.start,
+                    trashed=False,
+                    content=content,
+                    raw_metadata={},
+                )
+            )
+        else:
+            await uow.session.execute(
+                update(t)
+                .where(t.c.id == item_id)
+                .values(
+                    content=content,
+                    content_hash=digest,
+                    provider_version=ev.provider_version,
+                    occurred_at=ev.start,
+                    stage="fetched",
+                    stage_attempts=0,
+                    stage_updated_at=text("now()"),
+                    next_attempt_at=None,
+                )
+            )
+        stored += 1
+        await publish(
+            uow,
+            NewEvent(
+                SOURCE_ITEM_STORED,
+                "source_item",
+                item_id,
+                SourceItemStored(source_item_id=item_id, kind="calendar_event"),
+            ),
+        )
+    return stored
+
+
+def event_content(ev: Any) -> dict[str, Any]:
+    return {
+        "external_id": ev.external_id,
+        "series_external_id": ev.series_external_id,
+        "ical_uid": ev.ical_uid,
+        "start": ev.start.isoformat(),
+        "end": ev.end.isoformat(),
+        "timezone": ev.timezone,
+        "title": ev.title,
+        "description": ev.description,
+        "attendees": [
+            {"email": a.email, "display_name": a.display_name, "response": a.response} for a in ev.attendees
+        ],
+        "organizer": {"email": ev.organizer.email, "display_name": ev.organizer.display_name}
+        if ev.organizer
+        else None,
+        "conference_uri": ev.conference_uri,
+        "status": ev.status,
+    }
+
+
+async def mark_deleted(
+    uow: UnitOfWork, info: ConnectionInfo, *, kind: str, external_ids: Sequence[str]
+) -> int:
+    """Provider permanently deleted items (§9.3): tombstone, then ``SourceItemDeleted``."""
+    t = source_items_table
+    rows = (
+        await uow.session.execute(
+            update(t)
+            .where(
+                t.c.connection_id == info.connection_id,
+                t.c.kind == kind,
+                t.c.external_id.in_(list(external_ids)),
+                t.c.deleted_at.is_(None),
+            )
+            .values(deleted_at=text("now()"))
+            .returning(t.c.id)
+        )
+    ).all()
+    for row in rows:
+        await publish(
+            uow,
+            NewEvent(
+                SOURCE_ITEM_DELETED,
+                "source_item",
+                row.id,
+                SourceItemDeleted(source_item_id=row.id, kind=kind),
+            ),
+        )
+    return len(rows)
 
 
 async def get_source_item(uow: UnitOfWork, source_item_id: UUID, *, for_update: bool = False) -> SourceItem:

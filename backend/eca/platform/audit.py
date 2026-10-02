@@ -43,12 +43,14 @@ async def record_audit(
     target_id: UUID | None = None,
     ip: str | None = None,
     metadata: dict[str, Any] | None = None,
+    anonymous: bool = False,
 ) -> None:
-    """Insert one audit row for the unit of work's user (NULL before sign-in)."""
+    """Insert one audit row for the unit of work's user (NULL before sign-in, or ``anonymous``
+    for the content-free record that outlives a deleted account)."""
     await uow.session.execute(
         insert(audit_log_table).values(
             id=uuid7(),
-            user_id=uow.user_id,
+            user_id=None if anonymous else uow.user_id,
             actor=actor,
             action=action,
             target_type=target_type,

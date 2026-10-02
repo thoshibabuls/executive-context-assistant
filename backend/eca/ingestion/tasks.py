@@ -13,7 +13,7 @@ from eca.connections import list_active_connections
 from eca.connectors import ConnectorRegistry
 from eca.identity import list_active_user_ids
 from eca.ingestion.events import SYNC_REQUESTED, SyncRequested
-from eca.ingestion.service import MAIL_RESOURCE, sync_mail
+from eca.ingestion.service import CALENDAR_RESOURCE, MAIL_RESOURCE, sync_calendar, sync_mail
 from eca.platform.clock import Clock
 from eca.platform.events import HandlerContext, NewEvent, handles
 from eca.platform.jobs import PeriodicTaskSpec
@@ -27,10 +27,11 @@ SYNC_HANDLER = "ingestion.sync"
 async def on_sync_requested(ctx: HandlerContext) -> None:
     payload = ctx.payload
     assert isinstance(payload, SyncRequested)
-    if payload.resource != MAIL_RESOURCE:
-        return  # calendar sync is wired with the meetings module (slice 1.6)
     assert ctx.envelope.user_id is not None
-    await sync_mail(
+    run = {MAIL_RESOURCE: sync_mail, CALENDAR_RESOURCE: sync_calendar}.get(payload.resource)
+    if run is None:
+        return
+    await run(
         ctx.factory,
         ctx.resources.get(ConnectorRegistry),
         user_id=ctx.envelope.user_id,
@@ -50,18 +51,19 @@ async def request_syncs(
     for user_id in users:
         async with uow_factory(user_id=user_id) as uow:
             for info in await list_active_connections(uow):
-                await publish(
-                    uow,
-                    NewEvent(
-                        event_type=SYNC_REQUESTED,
-                        aggregate_type="connection",
-                        aggregate_id=info.connection_id,
-                        payload=SyncRequested(
-                            connection_id=info.connection_id, resource=MAIL_RESOURCE, trigger=trigger
+                for resource in (MAIL_RESOURCE, CALENDAR_RESOURCE):
+                    await publish(
+                        uow,
+                        NewEvent(
+                            event_type=SYNC_REQUESTED,
+                            aggregate_type="connection",
+                            aggregate_id=info.connection_id,
+                            payload=SyncRequested(
+                                connection_id=info.connection_id, resource=resource, trigger=trigger
+                            ),
                         ),
-                    ),
-                )
-                count += 1
+                    )
+                    count += 1
     return count
 
 

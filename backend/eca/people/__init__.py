@@ -5,6 +5,7 @@ Other modules import only from this package root.
 """
 
 from eca.people.identity_rules import is_public_domain, normalize_alias, normalize_email
+from eca.people.purge import purge_mentions, purge_mentions_for_sources, purge_user
 from eca.people.service import (
     MentionIn,
     PersonRef,
@@ -34,6 +35,9 @@ __all__ = [
     "merged_ids",
     "normalize_alias",
     "normalize_email",
+    "purge_mentions",
+    "purge_mentions_for_sources",
+    "purge_user",
     "record_interaction",
     "record_mentions",
     "resolve_address",
