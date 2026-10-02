@@ -6,19 +6,23 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from eca.api.assistant import router as assistant_router
 from eca.api.auth import router as auth_router
+from eca.api.chat import router as chat_router
 from eca.api.connections import router as connections_router
 from eca.api.context import router as context_router
 from eca.api.health import router as health_router
 from eca.api.middleware import RequestIdMiddleware
 from eca.api.problems import install_problem_handlers
 from eca.api.projects import router as projects_router
+from eca.api.ratelimit import RateLimiter
 from eca.api.work import router as work_router
 from eca.identity import JwksCache
+from eca.intelligence import AIClient, AIError, build_ai_client
 from eca.platform.config import Settings, get_settings
 from eca.platform.cursors import CursorCodec
 from eca.platform.db import create_engine, create_session_factory
@@ -28,6 +32,19 @@ from eca.platform.runtime import ensure_selector_event_loop_policy
 from eca.platform.uow import UnitOfWorkFactory
 
 ensure_selector_event_loop_policy()
+log = structlog.get_logger("eca.api")
+
+
+def _ai_client(settings: Settings, factory: UnitOfWorkFactory | None) -> AIClient | None:
+    """The chat path's AI client (AI-04/05/06/07), metered as the API role. Without a database,
+    a key or a valid configuration the API still starts and chat answers degrade (AI_PIPELINE.md §14)."""
+    if factory is None:
+        return None
+    try:
+        return build_ai_client(settings, uow_factory=factory)
+    except AIError as exc:
+        log.warning("ai_client_unavailable", error_type=type(exc).__name__)
+        return None
 
 
 def _init_sentry(settings: Settings) -> None:
@@ -59,6 +76,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.jwks = JwksCache(app.state.http)
         key = settings.cursor_signing_key.get_secret_value() if settings.cursor_signing_key else None
         app.state.cursors = CursorCodec(key)
+        app.state.rate_limiter = RateLimiter()
+        app.state.ai_client = _ai_client(settings, app.state.uow_factory)
         try:
             yield
         finally:
@@ -90,6 +109,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(context_router)
     app.include_router(assistant_router)
     app.include_router(projects_router)
+    app.include_router(chat_router)
     return app
 
 

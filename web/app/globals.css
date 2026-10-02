@@ -24,3 +24,4 @@ button:disabled { opacity: 0.5; cursor: default; }
 input { font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; flex: 1; min-width: 0;
   background: transparent; color: inherit; }
 .empty { color: var(--muted); }
+.citations { margin-top: 6px; }

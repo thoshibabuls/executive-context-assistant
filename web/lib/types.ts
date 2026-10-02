@@ -74,3 +74,48 @@ export type Today = {
 };
 
 export type Page<T> = { items: T[]; next_cursor: string | null };
+
+// Chat (backend/eca/chat, BACKEND_DESIGN.md §16.7). Claim kinds follow AI_PIPELINE.md §5.7.
+export type ClaimKind = "source" | "user" | "inference" | "recommendation" | "absence";
+
+export type Claim = { text: string; citations: string[]; kind: ClaimKind; flagged: boolean; reason: string | null };
+
+export type Citation = {
+  cid: string;
+  kind: string;
+  entity_id?: string | null;
+  text: string;
+  data_class?: string;
+  source_item_ids: string[];
+  evidence_ids?: string[];
+};
+
+export type ChatMessage = {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant";
+  content: string;
+  reply_to_id: string | null;
+  scenario: string | null;
+  answer_tier: "deterministic" | "T1" | "T2" | "abstain" | "degraded" | null;
+  claims: Claim[];
+  citations: Citation[];
+  confidence: "low" | "medium" | "high" | null;
+  provenance: { extraction_method?: string; model?: string | null; planner?: string } | null;
+  created_at: string | null;
+};
+
+export type ChatSession = {
+  id: string;
+  title: string | null;
+  scope: { kind: string; meeting_id?: string };
+  last_active_at: string | null;
+  messages?: ChatMessage[];
+};
+
+export type ChatEvent =
+  | { name: "plan"; data: { scenario: string; tier: string; planner: string } }
+  | { name: "sources"; data: { citations: Citation[]; coverage?: string } }
+  | { name: "delta"; data: { text: string } }
+  | { name: "final"; data: { message: ChatMessage } }
+  | { name: "error"; data: { code: string; title: string } };

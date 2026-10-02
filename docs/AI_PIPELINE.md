@@ -278,6 +278,7 @@ Answer schema (AI-06, AI-07; AI-08 adds `context`, `previous_agreement`, `curren
 - The displayed answer is rendered from the verified claims (one sentence per claim, labelled by kind, with its citation chips); the model's `answer_markdown` is not shown, so a relabelled claim can never appear as fact.
 - Absence claims without `COVERAGE` get the coverage citation and the coverage sentence appended.
 - Abstention template: "The available context does not establish this." + the coverage sentence + up to 3 closest related items. Degraded template (model unavailable, budget cap): "A written answer is not available right now." + the deterministic list of retrieved items with citations.
+- An answer whose only surviving claims are `absence` claims (with coverage) is shown, not replaced by the abstention template: "no completion evidence, searched … synced …" is the qualified absence of §5.7 rule 3.
 
 **Claim kinds of deterministic answers.** An item that is user-created, confirmed or has user-set fields → `user`; an AI-derived item with `commitment_strength = explicit` → `source`; other AI-derived items → `inference` (rendered "possible" when the confidence band is low); a computed reply state ("awaiting your reply") → `source` citing the conversation card.
 

@@ -4,7 +4,7 @@ Deletion jobs are ordered (children before parents, no cascades, §13.2), idempo
 resumable: every step can run again after a crash; ``deletion_jobs.progress`` records the steps
 done for operators. Each step is its own short worker transaction for the user.
 
-Account deletion order (§13.3): revoke tokens → retrieval (chunks) → work (mentions first: they
+Account deletion order (§13.3): revoke tokens → chat → retrieval (chunks, traces) → work (mentions first: they
 point at evidence) → communication → meetings → intelligence → people → ingestion → connections
 → final step (idempotency keys, feedback, sessions, the user's event consumptions and outbox
 rows, audit rows replaced by one content-free record, the job row, the user row) in one
@@ -31,6 +31,7 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from eca import (
+    chat,
     communication,
     connections,
     identity,
@@ -109,6 +110,7 @@ async def _work_step(uow: UnitOfWork) -> None:
 
 
 _ACCOUNT_STEPS: tuple[tuple[str, Step], ...] = (
+    ("chat", chat.purge_user),
     ("retrieval", retrieval.purge_user),
     ("work", _work_step),
     ("communication", communication.purge_user),
@@ -336,6 +338,7 @@ _DATA_COUNTS = {
     "source_items": "SELECT count(*) FROM source_items WHERE deleted_at IS NULL",
     "search_index_chunks": "SELECT count(*) FROM chunks",
     "projects": "SELECT count(*) FROM projects WHERE deleted_at IS NULL",
+    "chat_messages": "SELECT count(*) FROM chat_messages",
 }
 
 

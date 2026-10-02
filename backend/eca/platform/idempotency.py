@@ -97,3 +97,10 @@ async def purge_expired_keys(uow: UnitOfWork, *, now: datetime.datetime) -> int:
 
 async def purge_user_keys(uow: UnitOfWork) -> None:
     await uow.session.execute(delete(idempotency_keys_table))
+
+
+async def release_key(uow: UnitOfWork, key: str) -> None:
+    """Forget a key whose run failed before storing a response, so the client can retry (Phase 2
+    chat: the answer streams over several transactions, BACKEND_DESIGN.md §16.7)."""
+    t = idempotency_keys_table
+    await uow.session.execute(delete(t).where(t.c.key == key, t.c.status_code.is_(None)))

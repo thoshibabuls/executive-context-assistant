@@ -12,6 +12,7 @@ from eca.retrieval.assembly import (
     embed_question,
     needs_discovery,
     plan_window,
+    session_sources,
 )
 from eca.retrieval.cards import delimit, fmt_date
 from eca.retrieval.changes import ChangeSet, DayView, NetChange, changes_since, day_view, item_net_change
@@ -43,6 +44,7 @@ from eca.retrieval.plan import (
     SessionState,
     Turn,
 )
+from eca.retrieval.planner import candidate_names, plan_by_rules, plan_question
 from eca.retrieval.purge import purge_user
 from eca.retrieval.registry import all_retrievers
 from eca.retrieval.search import ChunkHit, SearchFilters, hybrid_search, ts_terms
@@ -103,6 +105,7 @@ __all__ = [
     "all_retrievers",
     "assemble",
     "calendar_chunks",
+    "candidate_names",
     "change_feed",
     "changes_since",
     "context_for",
@@ -120,6 +123,8 @@ __all__ = [
     "meeting_target",
     "message_target",
     "needs_discovery",
+    "plan_by_rules",
+    "plan_question",
     "plan_window",
     "project_context_for",
     "purge_old_traces",
@@ -128,6 +133,7 @@ __all__ = [
     "purge_user",
     "reembed_stale",
     "remove_source",
+    "session_sources",
     "split_text",
     "topic_groups",
     "topic_mode",

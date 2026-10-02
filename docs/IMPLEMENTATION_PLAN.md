@@ -1,6 +1,6 @@
 # Implementation Plan — Executive Context Assistant
 
-**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete). Phase 1: code written, untested (§0.5). Phase 2: in progress — coding only; tests deferred (§0.6)
+**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete). Phase 1: code written, untested (§0.5). Phase 2: code complete, tests deferred (§0.6) — not complete until its tests and exit criteria pass
 **Date:** 2026-10-02
 **Authority:** Execution order, slices, deliverables and exit criteria. Architecture is defined in `TECHNICAL_DESIGN.md` and the documents in its §5.1; this plan must not introduce behaviour or architecture that those documents do not describe (`CLAUDE.md`: "If implementation requires changing product behavior, stop and update the appropriate document first").
 
@@ -36,7 +36,7 @@ At the owner's instruction ("code only, no tests"), slices 1.1–1.9 were writte
 
 Exit criteria of slices 1.1–1.9 are **not met**: each requires tests that have not been run. The Phase 1 exit (real Gmail test account, RT suite, `golden-v1.0`, E1–E4) is not met.
 
-### 0.6 Phase 2 code status — in progress, coding only; tests deferred
+### 0.6 Phase 2 code status — code complete, tests deferred
 
 At the owner's instruction ("Phase 2 — coding only; testing is deferred to a later task"), slices 2.1–2.5 are written in the order 2.1 → 2.2 → 2.3 → 2.5 → 2.4 without writing or running any test. Static checks (ruff, ruff format, mypy strict, lint-imports) run through the pre-commit hooks on every commit. No live Gemini call is made; experiments X6 and X7 are not run. Phase 2 is **not complete** until the deferred tests below and the Phase 2 exit criteria (§4) pass.
 
@@ -54,6 +54,30 @@ Phase 2 builds on the Phase 1 code of §0.5, which is itself untested. Phase 2 c
 | Phase 2 exit | G3/G4 thresholds on S1–S3 and S6–S12 (`CONTEXT_EVALUATION.md` §14); retrieval-method ablation R1–R5 run once and recorded (§10) |
 
 Also deferred: unit tests of the pure functions added in Phase 2 (chunking, token estimate, alias scan, continuation scoring, temporal resolver, RRF and §9.2 ranking, packet layout and budgets, coverage rendering, net-change fold, planner rules, grounding checks), integration tests of the new migrations (0011–0017: up/down/up, privilege matrix, RLS fail-closed on every new table, RT-15 extension), API tests of the new routes (SSE events, `Idempotency-Key` replay, rate limit, 404 on other users' IDs) and the deletion paths that now include chunks, traces, links, checkpoints, projects and chat (RT-10, RT-11 extensions).
+
+**Code status per slice** (commits on `main`; no test written or run; static checks pass on every commit):
+
+| Slice | Code | Migrations |
+|---|---|---|
+| 2.1 Indexing | Chunking per §9.10, natural-key index handlers (`MessageNormalized`, `MeetingChanged`) with an advisory lock per source item, idempotent chunk upserts, AI-04 only for changed chunks (cap 4 calls, FTS-only at the hard budget cap), removal on `SourceItemDeleted`, alias scan into `entity_mentions`, `continues` links in `entity_links`, operator `eca ops reembed` | 0011 `chunks`, 0012 `entity_links` |
+| 2.2 Retrieval | Typed retrievers S1, S2, S6–S9, S12 (+ overdue, deadlines, who-is-waiting-on-me), one-statement hybrid search with RRF, scope before ranking, ranking, cards, packet layout and budgets, coverage block, content-free traces | 0013 `retrieval_traces` |
+| 2.3 Change feed and day view | Net-change fold, S10 and S11 retrievers, `GET /changes`, `PUT /checkpoints/{surface}`, `GET /days/{date}`, hourly `time_sweep` | 0014 `user_checkpoints` |
+| 2.5 Projects | Projects module (suggestions, confirm/reject/edit/assign), S3 project context and topic mode, project alias scan and change-feed scope, project and topic routes | 0015 `projects`, `project_members`, `work_items.project_id`; 0016 concurrent indexes |
+| 2.4 Chat | Planner (rules, AI-05), deterministic list answers, AI-06/AI-07 with claim kinds, grounding checks, abstention and degradation, per-user budget caps, session context (4 turns + focus map), SSE route with `Idempotency-Key` and rate limit, minimal web chat page (`web/app/chat`) | 0017 `chat_sessions`, `chat_messages` |
+
+Existing test files were edited only to move the migration head constants and per-revision table sets to `0017`; they were not run. `tests/integration/test_privileges.py` still lists only the Batch A business tables (stale since Phase 1, which added `extractions`, `work_items` and others); it is expected to fail until it is updated with the deferred tests.
+
+**Known gaps left in the code (to resolve with the deferred tests):**
+- Phase 1, on which Phase 2 builds, has never run in CI or under pytest (§0.5).
+- `TranscriptStored` indexing and transcript chunking wait for slice 4.2; S4/S5 stay in Phase 4.
+- Item and decision embeddings are not built; their discovery is full-text plus the evidence pivot.
+- Decisions, conversations and meetings get no `context_events` from the Phase 1 writers; the change feed and day view read decisions, new awaiting replies and meetings from their own tables.
+- The extra retrieval round of §6.4 (`missing_info`) is not built; only the AI-06 → AI-07 escalation is.
+- `since_last_meeting` from AI-05 is treated as "recently" until meeting anchors exist (Phase 4).
+- A chat turn that fails keeps the stored question; the key is released, so a retry with the same key re-runs and stores the question again. A process crash mid-turn leaves the key "in progress" until it expires (24 h); the client then retries with a new key.
+- Project suggestions group hints by exact normalized key (no fuzzy clustering).
+- Budget checks read 15-minute roll-ups, so a few calls can pass after a cap is crossed (`AI_COST_MODEL.md` §7.1).
+- The web chat page is minimal: one session, no meeting-scoped sessions, no feedback buttons.
 
 **Experiments deferred:** X6 (chat routing per intent) and X7 (is the planner needed?) are not run in this task. The code implements the default routes of `AI_PIPELINE.md` §4 and §8.2; X6 and X7 decide them on the frozen dataset later.
 

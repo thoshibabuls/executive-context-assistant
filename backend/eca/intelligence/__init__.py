@@ -6,6 +6,14 @@ Other modules import only from this package root; only this module imports ``goo
 
 from __future__ import annotations
 
+from eca.intelligence.answering import (
+    LOOKUP_PROMPT_VERSION,
+    PLAN_PROMPT_VERSION,
+    SYNTHESIS_PROMPT_VERSION,
+    InteractiveCall,
+    run_answer,
+    run_plan_query,
+)
 from eca.intelligence.budget import (
     DAILY_HARD_CAP_USD,
     DAILY_SOFT_CAP_USD,
@@ -54,7 +62,16 @@ from eca.intelligence.extraction import (
     store_success,
     succeeded_extractions,
 )
-from eca.intelligence.output_schemas import Adjudication, EmailExtraction, Statement, StatusSignal, Triage
+from eca.intelligence.output_schemas import (
+    Adjudication,
+    Answer,
+    AnswerClaim,
+    EmailExtraction,
+    PlanQuery,
+    Statement,
+    StatusSignal,
+    Triage,
+)
 from eca.intelligence.provenance import EvidenceSpan, Provenance, SourceRef, confidence_band
 from eca.intelligence.provider.attempts import (
     Action,
@@ -108,12 +125,17 @@ __all__ = [
     "EMAIL_PROMPT_VERSION",
     "EMBED_INPUT_VERSION",
     "EXTRACTION_COMPLETED",
+    "LOOKUP_PROMPT_VERSION",
     "MAX_EMBED_BATCH",
+    "PLAN_PROMPT_VERSION",
+    "SYNTHESIS_PROMPT_VERSION",
     "AIClient",
     "AIConfig",
     "AIError",
     "Action",
     "Adjudication",
+    "Answer",
+    "AnswerClaim",
     "BudgetLevel",
     "CallRecord",
     "CallStatus",
@@ -137,9 +159,11 @@ __all__ = [
     "ExtractionRecord",
     "FileRef",
     "GenerateResult",
+    "InteractiveCall",
     "Meter",
     "NoFallback",
     "Participant",
+    "PlanQuery",
     "PriceNotFound",
     "PriceTable",
     "Provenance",
@@ -192,8 +216,10 @@ __all__ = [
     "reset_apply",
     "rollup_costs",
     "run_adjudication",
+    "run_answer",
     "run_email_extract",
     "run_interactive",
+    "run_plan_query",
     "set_code_path",
     "store_failure",
     "store_success",
