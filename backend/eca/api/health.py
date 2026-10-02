@@ -20,9 +20,9 @@ async def healthz() -> dict[str, str]:
 
 @router.get("/readyz")
 async def readyz(request: Request) -> JSONResponse:
-    """Database reachable and schema at the migration head.
+    """Database reachable and schema at the migration head (API process only).
 
-    The worker adds a dispatcher-heartbeat check in slice 0.3.
+    Worker health is not part of slice 0.3; it is designed with hosting (BACKEND_DESIGN.md §16.5).
     """
     report = await check_readiness(request.app.state.engine, head=request.app.state.migration_head)
     body: dict[str, Any] = {

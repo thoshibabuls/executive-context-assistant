@@ -1,6 +1,6 @@
 # Implementation Plan — Executive Context Assistant
 
-**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented (0.2 exit not yet re-verified, §0); slice 0.3 defined, not started
+**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 fully specified, not started
 **Date:** 2026-10-02
 **Authority:** Execution order, slices, deliverables and exit criteria. Architecture is defined in `TECHNICAL_DESIGN.md` and the documents in its §5.1; this plan must not introduce behaviour or architecture that those documents do not describe (`CLAUDE.md`: "If implementation requires changing product behavior, stop and update the appropriate document first").
 
@@ -8,29 +8,32 @@
 
 ## 0. Implementation status
 
-Last updated 2026-10-02 (fresh-session audit and documentation-only pre-0.3 reconciliation).
+Last updated 2026-10-02 (slice 0.3 finalization, documentation only).
 
 | Slice | Code | Verification |
 |---|---|---|
-| 0.1 Repository hygiene | Implemented (commit `5b71b09`) | `.env` git-ignored and untracked (unit tests pass). gitleaks pre-commit hook over all files: passed in the current environment. Git-history scan (CI `secrets` job): not run, no remote. Gemini key rotation: not verifiable from the repository (owner action) |
-| 0.2 Backend skeleton | Implemented (commit `5b71b09`) | Exit criterion "CI green; RT-15 passes" **not met in the current environment** (below) |
-| 0.3 Reliability core | Not started | Scope fixed in §2 of this plan, slice 0.3 |
+| 0.1 Repository hygiene | Implemented (commit `5b71b09`) | `.env` git-ignored and untracked (unit tests pass, locally and in CI). gitleaks pre-commit hook over all files: passed locally. **Git-history scan (CI `secrets` job): not performed.** The job fails in its install step before scanning (§0.1). Gemini key rotation: not verifiable from the repository (owner action) |
+| 0.2 Backend skeleton | Implemented (commit `5b71b09`) | **RT-15 passes** on PostgreSQL in CI. **"CI green" is not met**: the lint and test jobs pass, but the overall run is red because of the `secrets` job (§0.1) |
+| 0.3 Reliability core | Not started | Fully specified in §2 of this plan, slice 0.3, and in `BACKEND_DESIGN.md` §7, §14.3, §15, §21 |
 
-### 0.1 Current environment (fresh session, 2026-10-02)
+### 0.1 CI evidence (GitHub Actions)
 
-- Windows 11; Python 3.11.5 virtual environment at the repository root.
-- Docker is not available. No PostgreSQL listens on `localhost:5432`. `ECA_TEST_DATABASE_URL` is not set.
-- No git remote, so GitHub Actions has never run.
-- `pytest` at the audit: **33 passed, 12 skipped**. All skipped tests are `db`-marked (4 migration tests, 8 RT-15 tests).
-- After `test_user_id_must_be_a_uuid` moved to `tests/unit/test_platform.py` (it checks a constructor argument and opens no connection): **34 passed, 11 skipped**.
-- `ruff check`, `ruff format --check`, `mypy` (strict, 29 source files) and `lint-imports` (3 contracts kept): pass.
-- **Not verified in this environment:** migration tests, RT-15, CI.
+The remote `github.com/thoshibabuls/executive-context-assistant` exists. Workflow `ci`, run [37015417109](https://github.com/thoshibabuls/executive-context-assistant/actions/runs/37015417109) (run 1, push to `main`, commit `1f6b0c0`, 2026-10-02):
 
-### 0.2 Previous environment evidence (kept as history, not as current verification)
+| Job | Result | Detail |
+|---|---|---|
+| `lint` | **Passed** | ruff, ruff format, mypy (strict), lint-imports (3 contracts kept) |
+| `test` | **Passed** | `pytest`: **45 passed, 0 skipped** against the `pgvector/pgvector:pg17` service (PostgreSQL 17.11). Includes the 4 PostgreSQL-backed migration tests and the 7 RT-15 tests. With `CI=true`, a missing database is a failure, not a skip |
+| `secrets` | **Failed before scanning** | The install step saves the release archive as `gitleaks.tar.gz`, but `sha256sum -c` checks the original asset name `gitleaks_8.30.1_linux_x64.tar.gz` ("No such file or directory"). This is a deterministic workflow bug, not a finding and not a flake. The history scan never ran |
+| **Overall run** | **Red (failure)** | Because of `secrets` |
 
-- The message of commit `5b71b09` lists the integration and RT-15 tests. It also records two defects found while running against a database: the readiness probe hung 130 s on an unreachable database (now bounded to 3 s), and uvicorn forced a Proactor loop on Windows (selector loop factory added).
-- The project owner reports that RT-15 passed against a local PostgreSQL in that environment.
-- No test log is stored in the repository, and the run cannot be reproduced in the current environment.
+The workflow runs on pushes to `main` and on pull requests only. Fixing the `secrets` job is a workflow change outside the slice 0.3 code. It is required before any slice can be marked "complete" (§1.1).
+
+### 0.2 Local environments (history; CI above is the reference evidence)
+
+- **Windows 11 (audit before 0.3):** Python 3.11.5; no Docker, no PostgreSQL. `pytest` gave 34 passed, 11 skipped (all `db`-marked); ruff, format, mypy (29 files) and lint-imports pass. The project owner reports that RT-15 passed earlier against a local PostgreSQL. No log of that run is stored.
+- **Linux cloud session (2026-10-02):** Python 3.11; the same 34 passed and 11 skipped without a database, and ruff, format, mypy and lint-imports pass. The distribution's pgvector package is 0.6.0, which migration `0001` correctly rejects (≥ 0.8 is required), so the database tests could not run there.
+- Commit `5b71b09` records two defects found while running against a database: the readiness probe hung 130 s on an unreachable database (now bounded to 3 s), and uvicorn forced a Proactor loop on Windows (selector loop factory added).
 
 ---
 
@@ -50,8 +53,10 @@ Last updated 2026-10-02 (fresh-session audit and documentation-only pre-0.3 reco
 | Decision on OAuth app type (Q2) and start of verification | Before first external pilot |
 | Hosting decision (Q1) | Before first hosted pilot (not needed for local development) |
 | Owner for dataset labelling and weekly human review (Q12) | Slice 0.5 |
-| PostgreSQL 16+ with pgvector ≥ 0.8 reachable from the development machine (Docker Desktop with `docker compose up -d db`, or a native install) and `ECA_TEST_DATABASE_URL` set | Re-verifying the slice 0.2 exit; all of slice 0.3 |
-| GitHub remote with Actions enabled | "CI green" exits of slices 0.2 and 0.3 |
+| PostgreSQL 16+ with pgvector ≥ 0.8 reachable from the development machine (Docker Desktop with `docker compose up -d db`, or a native install) and `ECA_TEST_DATABASE_URL` set | Local verification of slice 0.3 |
+| GitHub remote with Actions enabled | Exists (§0.1) |
+| CI `secrets` job fixed (the archive name must match the checksum entry) | "CI green" for slice 0.2 and "complete" for slice 0.3 |
+| Runtime roles `eca_app` and `eca_worker` provisioned outside migrations (`BACKEND_DESIGN.md` §7.6, role lifecycle) | Running migrations `0002`+ locally (re-run `docker/postgres/init/01-roles.sql` on an existing volume) and in any hosted environment |
 
 ---
 
@@ -63,6 +68,7 @@ Last updated 2026-10-02 (fresh-session audit and documentation-only pre-0.3 reco
 - Rotate the Gemini key currently stored in `.env` if it was ever shared; never commit it.
 - Pre-commit: ruff (lint + format), mypy (strict on `eca`), gitleaks secret scan.
 - **Exit:** repository initialised; secret scan clean.
+- **Status:** implemented. The pre-commit scan is clean. The git-history scan has not run yet, because the CI `secrets` job fails before scanning (§0.1).
 
 ### Slice 0.2 Backend skeleton
 
@@ -72,40 +78,69 @@ Last updated 2026-10-02 (fresh-session audit and documentation-only pre-0.3 reco
 - SQLAlchemy async with psycopg 3; unit of work with `SET LOCAL app.user_id`; Alembic baseline; Docker Compose with `pgvector/pgvector` Postgres 16+; RLS helper and fail-closed test (RT-15).
 - CI: lint, types, unit + integration tests against Postgres container.
 - **Exit:** CI green; RT-15 passes.
-- **Status:** code complete; exit pending (§0): RT-15 must pass on PostgreSQL in the current environment, and CI must be green once a remote exists.
+- **Status:** code complete. RT-15 passes in CI (§0.1). The exit is not yet met only because the CI run is red: the `secrets` job fails before scanning. The exit is met when the same jobs pass with a fixed `secrets` job.
 
 ### Slice 0.3 Reliability core
 
 Authoritative design: `BACKEND_DESIGN.md` §7 (outbox, dispatch, reconciler, access model), §14.3 (retries), §15 (queues), §21 (RT-01 levels, RT-05, RT-15). This slice builds delivery infrastructure only. It creates no domain table, no `users`, no `source_items`.
 
-**Database (migration `0002`, platform)**
+**Database (migrations `0002`–`0004`, platform; `BACKEND_DESIGN.md` §7.7)**
 
-- `outbox` and `event_consumptions` exactly as `BACKEND_DESIGN.md` §7.3, with `ix_outbox_pending (next_attempt_at) WHERE status = 'pending'` and `ix_outbox_user (user_id) WHERE user_id IS NOT NULL`; `event_consumptions` PK `(event_id, handler)` and FK `event_id → outbox(id)`.
-- `outbox.user_id` has **no FK yet**. Slice 1.1 adds `fk_outbox_user` in the migration that creates `users` (`BACKEND_DESIGN.md` §7.3.1).
-- Procrastinate schema for the pinned Procrastinate version, applied by an Alembic migration (never by `procrastinate schema --apply` at runtime). A later Procrastinate upgrade ships its schema migration as a new Alembic revision.
-- Worker role `eca_worker` and the privilege and policy matrix of `BACKEND_DESIGN.md` §7.6. The migration grants DML and default privileges to `eca_worker`. It revokes `eca_app`'s default grants on `outbox` (except INSERT), on `event_consumptions` and on all Procrastinate objects. It enables and forces RLS on `outbox` and `event_consumptions` with the role-targeted policies `outbox_api_insert`, `outbox_worker_all` and `event_consumptions_worker_all`. The migration refuses a worker role that is SUPERUSER or BYPASSRLS, like `0001`.
-- Settings `API_WORKER_DATABASE_URL` and `API_DB_WORKER_ROLE` (default `eca_worker`); `.env.example`, `docker/postgres/init/` and the test fixtures create the role. `API_DB_RUNTIME_ROLE` keeps naming the API role.
+Three revisions with one concern each, in a linear chain. Each creates its objects together with their grants and RLS in one transaction:
+
+- **`0002_runtime_role_access`**:
+  - Checks that both runtime roles exist, are not SUPERUSER or BYPASSRLS, are distinct and are not members of each other; it fails loudly otherwise.
+  - Gives the worker role USAGE on `public`, EXECUTE on `eca_current_user_id()`, SELECT on `alembic_version`, and default privileges (SELECT, INSERT, UPDATE, DELETE on tables; USAGE, SELECT on sequences).
+  - Revokes the API role's INSERT, UPDATE and DELETE on `alembic_version`. Those privileges were granted by `0001`'s `ON ALL TABLES`, contrary to `BACKEND_DESIGN.md` §7.6.
+  - Creates no tables and no roles.
+- **`0003_outbox`**:
+  - `outbox` and `event_consumptions` exactly as `BACKEND_DESIGN.md` §7.3, with `ix_outbox_pending (next_attempt_at) WHERE status = 'pending'` and `ix_outbox_user (user_id) WHERE user_id IS NOT NULL`. `event_consumptions` has PK `(event_id, handler)` and FK `event_id → outbox(id)`.
+  - Grant trims: `REVOKE SELECT, UPDATE, DELETE ON outbox FROM <api>`; `REVOKE ALL ON event_consumptions FROM <api>`; `REVOKE UPDATE ON event_consumptions FROM <worker>`.
+  - ENABLE and FORCE RLS, with the policies `outbox_api_insert`, `outbox_worker_all` and `event_consumptions_worker_all`.
+  - `outbox.user_id` has **no FK yet**. Slice 1.1 adds `fk_outbox_user` in the migration that creates `users` (`BACKEND_DESIGN.md` §7.3.1).
+- **`0004_procrastinate_schema`**:
+  - The schema of `procrastinate==3.10.0`, executed from the vendored file `backend/migrations/sql/procrastinate_3.10.0_schema.sql`. It is never applied by `procrastinate schema --apply`, and never read from the installed package at migration time.
+  - `REVOKE ALL` on Procrastinate tables and sequences `FROM <api>`; `REVOKE EXECUTE` on each `procrastinate_*` function `FROM PUBLIC`; `GRANT EXECUTE` on them `TO <worker>`.
+  - A later Procrastinate upgrade is a new revision that applies Procrastinate's own migration files (`BACKEND_DESIGN.md` §7.7).
+
+The resulting exact privilege state, and what the matrix test asserts, are in `BACKEND_DESIGN.md` §7.6.
+
+**Roles and settings**
+
+- Migrations never create or alter roles. The roles are provisioned outside them (`BACKEND_DESIGN.md` §7.6, role lifecycle):
+  - **Local:** `docker/postgres/init/01-roles.sql` creates both `eca_app` and `eca_worker`. Re-run it on a volume created before 0.3.
+  - **Tests and CI:** `tests/conftest.py` creates `eca_test_app` and `eca_test_worker` and passes both names to Alembic.
+  - **Hosted:** provisioning outside the application, with the hosting decision (Q1).
+- Settings `API_WORKER_DATABASE_URL` and `API_DB_WORKER_ROLE` (default `eca_worker`); `migrations/env.py` accepts `-x worker_role=…` like `runtime_role`; `.env.example` lists both. `API_DB_RUNTIME_ROLE` keeps naming the API role.
+- `pyproject.toml` pins `procrastinate==3.10.0` exactly.
 
 **Event infrastructure (`eca.platform`)**
 
 - Envelope: `id` (UUIDv7 generated by `publish`), `event_type`, `user_id` (copied from the active unit of work, never passed by the caller; NULL in a unit of work without a user), `aggregate_type`, `aggregate_id`, `payload` (validated by the Pydantic model registered for the type; IDs and small facts only), `correlation` (request ID from logging context), `created_at`.
 - Event identity is `outbox.id`. It is the key in `event_consumptions` and in job lock keys.
 - `register_event(type, payload_model)`. `publish` rejects an unregistered type at write time. `publish(uow, event)` inserts into `outbox` in the caller's transaction and does nothing else.
+- The insert works for the INSERT-only API role (`BACKEND_DESIGN.md` §7.3.3). It is one SQLAlchemy Core `insert(outbox).values(...)` with an explicit column list: no ORM `session.add`, no RETURNING, no `ON CONFLICT`. The application supplies `id`, `user_id`, `event_type`, `aggregate_type`, `aggregate_id`, `payload` and `correlation`. The DDL defaults supply `status`, `attempts`, `next_attempt_at` and `created_at`, which are never read back. `publish` returns the pre-generated `id`.
+- Registries are objects. `eca.platform` exposes a default registry filled by the production decorators; the dispatcher and worker take a registry as an argument (`BACKEND_DESIGN.md` §21, crash-test harness).
 - Handler registration: decorator `handles(event_type, name=…, queue=…)`. Names are unique and stable (registry rejects duplicates). Domain modules register handlers; the `eca.worker` composition package imports them. `platform` imports no domain module.
-- Handler wrapper (transactional mode): one `eca_worker` unit of work per job, with `app.user_id` = the event's `user_id` (unset for system events). First statement: `INSERT INTO event_consumptions … ON CONFLICT DO NOTHING RETURNING event_id`. No row → return without effects. Then the handler body, then commit. Any exception → rollback → Procrastinate retry (handler class in `BACKEND_DESIGN.md` §14.3: base 5 s, max 10 min, 8 attempts; after that a dead job and an alert log). The natural-key mode for handlers that call external services before their transaction is added in slice 1.4, when the first such handler exists.
+- Handler wrapper (transactional mode): one `eca_worker` unit of work per job, with `app.user_id` = the event's `user_id` (unset for system events). First statement: `INSERT INTO event_consumptions … ON CONFLICT DO NOTHING RETURNING event_id`. No row → return without effects. Then the handler body, then commit. Any exception → rollback → Procrastinate retry through the custom `HandlerRetryStrategy` (`BACKEND_DESIGN.md` §14.3). The built-in `RetryStrategy` of Procrastinate 3.10.0 cannot express the policy. Run n = `job.attempts + 1`. After a failed run n < 8 the job is retried after `min(5 s · 2^(n−1) + random(0–1 s), 10 min)`. After run 8, or after a non-retryable error (`ValidationFailed`, `AuthRevoked`, `Gone`), the strategy returns no retry, Procrastinate marks the job `failed` (a dead job), and the strategy logs `handler_job_dead`. Handler attempts are separate from `outbox.attempts`, which counts dispatch failures only. The natural-key mode for handlers that call external services before their transaction is added in slice 1.4, when the first such handler exists.
 
 **Dispatcher (`eca.platform`, run by the worker)**
 
 - Loop: tick every 1 s when idle; loop again at once when a batch was full (batch size configurable, default 100).
 - Claim: `SELECT … FROM outbox WHERE status = 'pending' AND next_attempt_at <= now() ORDER BY next_attempt_at, id LIMIT :n FOR UPDATE SKIP LOCKED`, in one `eca_worker` transaction with `app.user_id` unset.
-- Per row: the dispatch step of `BACKEND_DESIGN.md` §7.3. Lifecycle `pending → dispatched`, or `pending → failed` at 10 attempts. Backoff `min(1 s · 2^attempts + random(0–1 s), 5 min)`. Unregistered event type = error. Zero handlers = dispatched.
+- Per row: the dispatch step of `BACKEND_DESIGN.md` §7.3. Lifecycle `pending → dispatched`, or `pending → failed` at the 10th failed attempt. After failure n the backoff is `min(1 s · 2^(n−1) + random(0–1 s), 5 min)`. Unregistered event type = error. Zero handlers = dispatched.
 - Job keys: `queueing_lock = lock = "<handler>:<event_id>"`. `AlreadyEnqueued` = success. Job arguments carry the envelope, which holds no content.
 - Stale dispatch: no persisted intermediate state. A crash releases row locks and leaves rows `pending`; the next tick or the reconciler picks them up.
 - Duplicate dispatch: absorbed by `queueing_lock` while the first job is queued, by `lock` while it runs, and by `event_consumptions` after it committed (`BACKEND_DESIGN.md` §7.4).
 
 **Worker (`eca.worker`, new composition package)**
 
-- `python -m eca.worker` starts one Procrastinate worker per queue with the `BACKEND_DESIGN.md` §15 concurrency (`events` 8, `sync` 4, `ingest` 8, `extract` 8, `apply` 8, `embed` 2, `ai_standard` 4, `media` 1, `schedule` 1), the dispatcher loop, and the periodic tasks on `schedule`: `reconcile` (every 5 min) and Procrastinate stalled-job recovery for jobs whose worker died. In this slice only infrastructure tasks and test handlers are registered.
+- `python -m eca.worker` starts:
+  - one Procrastinate worker per queue with the `BACKEND_DESIGN.md` §15 concurrency (`events` 8, `sync` 4, `ingest` 8, `extract` 8, `apply` 8, `embed` 2, `ai_standard` 4, `media` 1, `schedule` 1);
+  - the dispatcher loop;
+  - the tasks on `schedule`: `reconcile` (every 5 min) and `recover_stalled_jobs` (once at start, then every minute). Recovery uses Procrastinate's worker heartbeats (10 s interval, 30 s stalled timeout) to find jobs of dead workers, re-queues them with `retry_job` (which counts as an attempt), and prunes the stalled workers (`BACKEND_DESIGN.md` §14.3).
+- In this slice no domain handlers exist. The production worker registers only infrastructure tasks. Test handlers are loaded only by the test launcher (below).
+- `eca.worker` exposes a public function that runs the worker from a registry and a `WorkerConfig` (queue concurrency, dispatcher tick and batch size, heartbeat interval, stalled timeout, handler retry strategy, dispatch backoff). `python -m eca.worker` builds both from code and settings and has no option, setting or environment variable that loads extra modules.
 - One driver: Procrastinate's psycopg 3 connector and the SQLAlchemy engine both connect as `eca_worker`. On Windows the worker uses the selector event loop (`BACKEND_DESIGN.md` §2.2).
 - Transaction boundaries: the business transaction (with its outbox row) commits before any job exists. Each dispatcher batch is one transaction. Procrastinate writes jobs through its own connection. Each handler job is one transaction that includes its consumption record.
 - Graceful stop: stop claiming and fetching, then finish in-flight jobs up to a timeout. Unfinished jobs are recovered by stalled-job recovery.
@@ -119,8 +154,16 @@ Authoritative design: `BACKEND_DESIGN.md` §7 (outbox, dispatch, reconciler, acc
 
 **Reliability utilities and tests**
 
-- Crash points: named hooks in dispatcher and handler code (`dispatch.after_claim`, `dispatch.after_defer`, `dispatch.before_commit`, `handler.after_consumption`, `handler.before_commit`, `handler.after_commit`). They are no-ops unless enabled by a test-only environment variable, and they refuse to activate when `API_ENV` is production. When armed, the process exits immediately with `os._exit` (no cleanup). Tests run the worker or dispatcher in a subprocess, kill it at a crash point, restart it and check the database.
-- Synthetic test fixtures: test-only event types and handlers. Each handler appends a row to a test-only effect table **without** a unique constraint, so a duplicate effect is visible instead of hidden by a key.
+- Crash points: named hooks in dispatcher and handler code (`dispatch.after_claim`, `dispatch.after_defer`, `dispatch.before_commit`, `handler.after_consumption`, `handler.before_commit`, `handler.after_commit`).
+  - They are no-ops unless the environment variable **`ECA_TEST_CRASH_POINT`** names one of them.
+  - The variable is read once at process start. An unknown name is a startup error. A set variable while `API_ENV` is production is a startup error: the process refuses to start.
+  - When armed, the first time the point is reached the process calls `os._exit(97)` with no cleanup.
+  - Tests run the worker or dispatcher in a subprocess with the variable set, check exit code 97, restart without the variable and check the database (`BACKEND_DESIGN.md` §21, crash-test harness).
+- Synthetic test fixtures, all under `backend/tests/reliability/support/`, never in `eca`:
+  - `synthetic.py` holds test-only event types (prefix `test.`) and handlers. Each handler appends a row to `rt_effects`, which has **no** unique constraint, so a duplicate effect is visible instead of hidden by a key. The table also records `current_setting('app.user_id')` inside the handler. A fixture creates it in the throwaway database and grants it to the test worker role; Alembic never creates it.
+  - The flaky handler for case (f) decides from Procrastinate's job attempt number, not from database state.
+  - `worker_main.py` is the test launcher: `python -m tests.reliability.support.worker_main --mode worker|dispatcher`. It registers the synthetic handlers in a registry and calls `eca.worker`'s public run function with a fast `WorkerConfig` (retry base 0.05 s, heartbeat 0.5 s, stalled timeout 2 s, tick 0.1 s).
+  - `tests/` is not part of the installed package, and nothing in `eca` imports it.
 - **RT-01, infrastructure level** (`BACKEND_DESIGN.md` §21):
   - (a) A business transaction commits a row and an outbox event while no dispatcher runs. A dispatcher started later dispatches it. The effect occurs once.
   - (b) Same, with a crash at `dispatch.after_claim`.
@@ -131,10 +174,28 @@ Authoritative design: `BACKEND_DESIGN.md` §7 (outbox, dispatch, reconciler, acc
   - (g) Two handlers on one event: one effect each.
   - (h) Two dispatchers at once: each event deferred once per handler.
 - **RT-05:** crash at `dispatch.after_defer` and at `dispatch.before_commit`. The row is re-dispatched. The duplicate is rejected by `queueing_lock` while the first job is queued, serialized by `lock` while it runs, and a no-op through `event_consumptions` after it committed. Each handler's effect occurs once.
-- **RT-15 extension:** the role and privilege assertions of `BACKEND_DESIGN.md` §21 for `eca_app` and `eca_worker`, plus the existing RT-15 suite.
+- **RT-15 extension:** the role and privilege assertions of `BACKEND_DESIGN.md` §21 for `eca_app` and `eca_worker`, plus the existing RT-15 suite. It includes the publish test: as `eca_app` with `app.user_id` = A, `platform.publish` of A's event succeeds and the worker role sees the row. As `eca_app`, SELECT, `INSERT … RETURNING`, UPDATE and DELETE on `outbox` fail with a privilege error, even when other users' rows exist, and an insert for user B or with NULL `user_id` fails the RLS check.
 - Other tests:
-  - Unit, no database: envelope and payload validation, registry rules, backoff formula, lock-key format, crash points inert in production, worker settings.
-  - PostgreSQL: migration `0002` up/down/up; privilege matrix; dispatcher lifecycle (`failed` after 10, zero-handler and unregistered types, backoff timing with a controllable clock); handler wrapper (consumption conflict, rollback leaves no consumption); reconciler pass; `outbox retry`.
+  - Unit, no database: envelope and payload validation, registry rules, both backoff formulas and `HandlerRetryStrategy` decisions (attempt limit, non-retryable errors, jitter bounds, cap) with an injected clock and random source, lock-key format, crash points (inert when unset, startup error on an unknown name or in production), worker settings and `WorkerConfig`.
+  - PostgreSQL:
+    - migrations `0001` → head → base → head;
+    - the privilege-matrix test of `BACKEND_DESIGN.md` §7.6 on a freshly migrated database;
+    - the migration role-check failures: missing worker role, an unsafe role, membership between the roles;
+    - the vendored Procrastinate schema compared with the package's `schema.sql`;
+    - the dispatcher lifecycle (`failed` after 10, zero-handler and unregistered types, backoff timing with a controllable clock);
+    - the handler wrapper (consumption conflict, rollback leaves no consumption);
+    - stalled-job recovery;
+    - the reconciler pass;
+    - `outbox retry`.
+
+**Not in this slice** (beyond the domain-schema exclusions above):
+- a worker health, readiness or dispatcher-heartbeat check, which is designed with the hosting decision (`BACKEND_DESIGN.md` §16.5);
+- replay of dead handler jobs;
+- `eca ops` subcommands other than `outbox retry`;
+- `idempotency_keys`;
+- the natural-key handler mode (1.4);
+- outbox retention purge (1.9);
+- any AI provider code (0.4).
 
 **What RT-01 at this level does not prove:** Gmail normalization, email or AI extraction, apply, the real message lifecycle, `source_items` processing or production email correctness. Slices 1.3 and 1.4 extend RT-01 to pipeline level (§8 below); Phase 1 exit requires the pipeline level.
 
@@ -154,16 +215,17 @@ Slice 0.3 is **locally verified** when all of these hold on one machine with Pos
 1. ruff, ruff format, mypy (strict) and lint-imports (with `eca.worker` as a composition module) pass.
 2. The full pytest suite passes with `ECA_TEST_DATABASE_URL` set and **zero skipped tests**. This includes RT-15, which also closes the open slice 0.2 exit locally.
 3. RT-01 (infrastructure level) and RT-05 pass **100 consecutive runs** with zero failures and no test-level reruns. The command and its summary line are recorded in the slice's PR or commit description.
-4. No domain schema was added (`users`, `source_items` and other domain tables are absent), and `outbox.user_id` has no FK.
+4. No domain schema was added (`users`, `source_items` and other domain tables are absent), `outbox.user_id` has no FK, and migrations created no roles.
 5. §0 of this plan is updated with the measured results.
 
-Slice 0.3 is **complete** when, in addition, GitHub Actions is green on the slice's commit (lint, tests with the PostgreSQL service including RT-01, RT-05 and RT-15, gitleaks). Until a remote exists, the slice stays "locally verified", not "complete".
+Slice 0.3 is **complete** when, in addition, GitHub Actions is green on the slice's commit: lint, tests with the PostgreSQL service including RT-01, RT-05 and RT-15, and a `secrets` job that actually scans the history. This requires the `secrets` workflow fix (§1.1). Until then the slice stays "locally verified", not "complete".
 
 ### Slice 0.4 AI provider layer
 
 - Provider layer inside the `intelligence` module (`eca/intelligence/provider/`, prompts in `eca/intelligence/prompts/`, structured-output schemas in `eca/intelligence/output_schemas/`; there is no `eca.ai` package, `BACKEND_DESIGN.md` §5.4): wrapper over `google-genai` (structured output, embeddings, Files API); role registry `config/models.yaml` (model, thinking, temperature, fallback per role); pricing `config/pricing.yaml` with effective dates (`AI_COST_MODEL.md` §2); `ai_calls` meter and 15-minute cost roll-ups (`AI_COST_MODEL.md` §8); attempt cap logic (`AI_PIPELINE.md` §7); cassette recorder/replayer keyed by `(role, prompt_version, input_hash)`; provenance envelope type (`AI_PIPELINE.md` §5.1).
 - Import-linter `forbidden` contract: only `eca.intelligence` imports `google.genai`.
 - Smoke test: verifies every configured model ID exists (resolves Q8: exact `gemini-embedding-2` ID) and replaces `test_gemini_key.py`'s deprecated default.
+- **Depends on:** 0.2 (unit of work, settings) and 0.3 (worker role, migration chain). `users` does not exist yet: `ai_calls` carries a `user_id` (`BACKEND_DESIGN.md` §6.2), and §17.1 puts an FK on every `user_id → users`. How `ai_calls.user_id` exists before 1.1 must be written into `BACKEND_DESIGN.md` before 0.4 starts. Options: the deferred-FK pattern of §7.3.1, added by the 1.1 migration, or another documented choice. The same applies to its access model under §7.6. 0.4 must not create `users`.
 - **Exit:** smoke test green; cassette replay deterministic.
 
 ### Slice 0.5 Evaluation harness
@@ -178,13 +240,23 @@ Slice 0.3 is **complete** when, in addition, GitHub Actions is green on the slic
 
 ### Slice 1.1 Identity and sessions
 
+**Depends on:** 0.3 (outbox, worker role). Tests use mocked Google; the external Google Cloud project is needed only for a real sign-in.
+
 Google OIDC (PKCE, `state`, `nonce`), server-side sessions, CSRF, `users` + self Person, `audit_log`, `DELETE /api/v1/me` request recorded (job built in 1.9). The migration that creates `users` also adds `fk_outbox_user` (`outbox.user_id → users(id)`, `BACKEND_DESIGN.md` §7.3.1) and defines the worker role's explicit read policy for enumerating users (`BACKEND_DESIGN.md` §7.6). Tests: auth flows with mocked Google, CSRF rejection, session expiry; FK present and enforced (outbox insert with an unknown `user_id` fails); RT-15 extended to the new tables.
 
 ### Slice 1.2 Connections
 
+**Depends on:** 1.1 (`users`). Creates the `connections` and `sync_cursors` tables (owned by `connections`, `BACKEND_DESIGN.md` §5.1), which 1.3 uses.
+
 Connect Gmail and Calendar (incremental scopes), envelope-encrypted refresh tokens (dev KEK from env), `granted_scopes` and feature gating, disconnect with revoke, `needs_reauth` on `invalid_grant`. Tests: token never logged/returned; denied-scope handling.
 
 ### Slice 1.3 Ingestion core with a fake connector
+
+**Depends on:**
+- 0.3 (outbox, dispatcher, reconciler);
+- 0.5 (`world_v1` fixtures read by the fake connectors);
+- 1.1 (`users`, which `source_items.user_id` references, and the worker's user-enumeration read policy used by the per-user reconciler scan);
+- 1.2 (`connections` and `sync_cursors`).
 
 - Connector protocols, DTOs, registry (`BACKEND_DESIGN.md` §20); fake mail/calendar connectors reading `world_v1`.
 - `source_items` with stage machine; `sync_cursors` rules (advance after durable store); normalize (MIME, quote/signature stripping, participants, person/org resolution, conversation reply state); prefilter on neutral categories; outbox events.
@@ -192,6 +264,8 @@ Connect Gmail and Calendar (incremental scopes), envelope-encrypted refresh toke
 - **Tests:** RT-01 pipeline level, first half (sync commit → `SourceItemStored` → normalized exactly once, fake connector), RT-04 (replay ×3, shuffled), RT-06 (crash mid-sync), RT-07 (duplicate triggers); E1 prefilter false-skip rate.
 
 ### Slice 1.4 Extract and apply
+
+**Depends on:** 0.4 (provider layer, cassettes, `ai_calls`), 0.5 (golden slice and runners for the A1 gate), 1.3 (`source_items`, normalization).
 
 - `extractions` lifecycle (`BACKEND_DESIGN.md` §8.1); AI-01 prompt v1 + schema; candidate lists (`CONTEXT_ARCHITECTURE.md` §12.1).
 - Apply: grounding, date resolution, direction rules, candidate matching and merge (`TECHNICAL_DESIGN.md` §13.6) under the per-user merge lock; evidence with deterministic IDs; `context_events`; `work.append_event` with row lock, fold, `version`, `user_fields`; provisional items + `AdjudicationNeeded` (AI-02 job); `messages.triage` projection.
@@ -294,7 +368,21 @@ Gmail/Calendar push (webhooks as sync signals), Batch API import with submission
 
 ## 9. Recommended first implementation slice
 
-**Slices 0.1 → 0.2 → 0.3 → 0.4 → 1.3 → 1.4, using the fake connector and recorded AI responses** ("reliability walking skeleton"):
+**Slices 0.1 → 0.2 → 0.3 → 0.4 → 0.5 → 1.1 → 1.2 → 1.3 → 1.4, using the fake connector and recorded AI responses** ("reliability walking skeleton").
+
+Each slice uses only infrastructure created by an earlier slice:
+
+| Slice | Needs | From |
+|---|---|---|
+| 0.3 | Unit of work, migration baseline, CI | 0.2 |
+| 0.4 | Worker role and migration chain; the `ai_calls.user_id` decision before start | 0.3 |
+| 0.5 | Nothing beyond the package layout (its runners execute against stub pipelines); it follows 0.4 in plan order but does not depend on it | 0.2 |
+| 1.1 | Outbox and worker role (for `fk_outbox_user` and the user read policy) | 0.3 |
+| 1.2 | `users` | 1.1 |
+| 1.3 | `world_v1` fixtures; `users` and the user read policy; `connections` and `sync_cursors` | 0.5; 1.1; 1.2 |
+| 1.4 | Provider layer and cassettes; golden slice and runners; `source_items` | 0.4; 0.5; 1.3 |
+
+Slices 1.1 and 1.2 need no Google OAuth verification (Testing mode is enough, and 1.1's auth tests mock Google). Real Gmail and Calendar traffic starts in 1.5 and 1.6. The walking skeleton is complete at 1.4:
 
 A labelled `world_v1` mailbox flows through sync → outbox → normalize → extract (AI-01 statement schema) → apply (deterministic direction mapping, date resolver, penalty-based confidence, candidate maps, provenance) → work items with evidence and timelines, readable through a minimal `GET /api/v1/work-items` — with RT-01 (pipeline level) to RT-05 and RT-12 to RT-15 green, zero canonical-phrase confusion on `DIR-120`, zero invented dates, and CC-01–CC-10, CC-34–CC-37, CC-40–CC-45 passing at L2 (`AI_PIPELINE_REVIEW.md` Part 3).
 

@@ -1,6 +1,6 @@
 # Backend Design — Executive Context Assistant
 
-**Status:** Reconciled architecture; slices 0.1–0.2 implemented. Pre-0.3 reconciliation (2026-10-02): outbox FK timing (§7.3.1), database roles and access model (§7.6), reconciler scope (§7.5), AI provider location (§5.4), RT-01 levels (§21)
+**Status:** Reconciled architecture; slices 0.1–0.2 implemented. Pre-0.3 reconciliation (2026-10-02): outbox FK timing (§7.3.1), database roles and access model (§7.6), reconciler scope (§7.5), AI provider location (§5.4), RT-01 levels (§21). Slice 0.3 finalization (2026-10-02): API-role outbox insert (§7.3.3), exact privilege mechanics and role lifecycle (§7.6), migration structure (§7.7), handler retry strategy and stalled jobs (§14.3, §15), worker health scope (§16.5), crash-test harness (§21)
 **Date:** 2026-10-02
 **Authority:** This document is authoritative for backend modules, the transaction and event model, the source-of-truth model, extraction/apply stages, idempotency, synchronization, concurrency, deletion, errors and retries, jobs, the HTTP API and the database schema. AI calls and their costs are defined in `AI_PIPELINE.md`; context and retrieval in `CONTEXT_ARCHITECTURE.md`.
 **Inputs:** `docs/PRD.md`, `docs/TECHNICAL_DESIGN.md`, `docs/CONTEXT_ARCHITECTURE.md`, `docs/AI_PIPELINE.md`, `CLAUDE.md`, installed skills (`ai-toolkit:backend-api-design`, `ai-toolkit:database-patterns`, `ai-toolkit:python-api-endpoint-creator`), official Google and Procrastinate documentation (References)
@@ -281,13 +281,13 @@ CREATE TABLE event_consumptions (
   PRIMARY KEY (event_id, handler));
 ```
 
-Both tables are created in slice 0.3. Their access model (roles, grants, RLS) is §7.6.
+Both tables are created in slice 0.3 by migration `0003` (§7.7). Their access model (roles, grants, RLS) is §7.6; how the API role inserts into `outbox` is §7.3.3.
 
 #### 7.3.1 Deferred foreign key `outbox.user_id → users(id)`
 
 | Question | Answer |
 |---|---|
-| When is `outbox` created? | Slice 0.3, migration `0002` (platform), before any domain table exists |
+| When is `outbox` created? | Slice 0.3, migration `0003` (platform, §7.7), before any domain table exists |
 | Why no FK in 0.3? | `users` does not exist until slice 1.1. `platform` is the base layer and must not create or know identity's tables; creating a stub `users` table in 0.3 would make platform own part of identity's schema |
 | When is the FK added? | Slice 1.1, in the **same** migration that creates `users` (identity): `ALTER TABLE outbox ADD CONSTRAINT fk_outbox_user FOREIGN KEY (user_id) REFERENCES users(id)` (`ON DELETE NO ACTION`) |
 | What if orphan rows exist then? | The `ADD CONSTRAINT` validates existing rows and the migration fails. Rows are never deleted silently; an operator removes test leftovers explicitly and re-runs. In practice no user-scoped producer exists before 1.1, and dispatched rows expire after 7 days |
@@ -307,7 +307,22 @@ Both tables are created in slice 0.3. Their access model (roles, grants, RLS) is
 
 There is no persisted "dispatching" state. A dispatcher claims rows by locking them (`FOR UPDATE SKIP LOCKED`) inside one transaction. A crash releases the locks and leaves the rows `pending`, so the next tick picks them up. "Stale dispatch" therefore means only: `pending` rows whose `next_attempt_at` has passed but which are not advancing (dispatcher stopped or failing). The reconciler (§7.5) and the "oldest pending > 2 min" alert cover that case.
 
-**Dispatch step** (per claimed row): resolve the handlers registered for `event_type`; for each handler, Procrastinate `defer` with `queueing_lock = lock = "<handler>:<event_id>"` (an `AlreadyEnqueued` rejection counts as success); when every handler is deferred, set `dispatched`, `dispatched_at`. A registered event type with zero handlers is marked `dispatched` directly. An unregistered event type is an error, not a skip, because a rolling deploy can briefly run a dispatcher that lacks a new type. On error: `attempts + 1`, `last_error`, `next_attempt_at = now() + min(1 s · 2^attempts + random(0–1 s), 5 min)` (§14.3); at 10 attempts → `failed`. If only some handlers were deferred before an error, the next attempt re-defers all of them; the already-deferred ones are absorbed by `queueing_lock` or `event_consumptions`. Events carry no ordering guarantee; handlers must not assume order.
+**Dispatch step** (per claimed row): resolve the handlers registered for `event_type`; for each handler, Procrastinate `defer` with `queueing_lock = lock = "<handler>:<event_id>"` (an `AlreadyEnqueued` rejection counts as success); when every handler is deferred, set `dispatched`, `dispatched_at`. A registered event type with zero handlers is marked `dispatched` directly. An unregistered event type is an error, not a skip, because a rolling deploy can briefly run a dispatcher that lacks a new type. On error: `attempts` becomes n (the number of failed dispatch attempts so far), `last_error` is set, and `next_attempt_at = now() + min(1 s · 2^(n−1) + random(0–1 s), 5 min)` (§14.3); when n reaches 10 the row becomes `failed`. `outbox.attempts` counts dispatch failures only; handler job failures never change the outbox row (§14.3). If only some handlers were deferred before an error, the next attempt re-defers all of them; the already-deferred ones are absorbed by `queueing_lock` or `event_consumptions`. Events carry no ordering guarantee; handlers must not assume order.
+
+#### 7.3.3 Publishing: the outbox insert without read access
+
+The API role has INSERT on `outbox` and no SELECT (§7.6). PostgreSQL requires SELECT privilege, and a passing read policy, for any row a statement returns. So an `INSERT … RETURNING` by `eca_app` fails with `permission denied`. This includes the RETURNING that the SQLAlchemy ORM adds on its own to fetch server-generated defaults, and `ON CONFLICT` clauses. This was verified on PostgreSQL 16 on 2026-10-02: a plain INSERT succeeds; the same insert with RETURNING, or through `session.add`, is denied; a NULL or foreign `user_id` is rejected by `outbox_api_insert`; SELECT is denied.
+
+`platform.publish` therefore follows these rules, for both roles (one code path):
+
+| Rule | Detail |
+|---|---|
+| One SQLAlchemy Core statement | `insert(outbox).values(...)` with an explicit column list. Never the ORM unit of work (`session.add`), never `.returning()`, never `ON CONFLICT` |
+| The application supplies identity and content | `id` (UUIDv7 generated before the insert, so `publish` returns it without reading the row back), `user_id` (from the unit of work, §7.3.1), `event_type`, `aggregate_type`, `aggregate_id`, `payload`, `correlation` |
+| The database supplies lifecycle columns through the DDL defaults, without reading them back | `status = 'pending'`, `attempts = 0`, `next_attempt_at = now()`, `created_at = now()`, `last_error` and `dispatched_at` NULL. The dispatcher compares `next_attempt_at` with the database's `now()`, so the timestamps come from the same clock. Defaults are filled in by PostgreSQL inside the INSERT and need no RETURNING |
+| Nothing read back | `publish` never selects the row it wrote. Tests that need to read the row use the worker role or the migration role |
+
+The security model is unchanged: the API role stays INSERT-only, and its inserts are limited to its own `app.user_id`.
 
 ### 7.4 Duplicate dispatch, crash recovery, idempotency
 
@@ -362,6 +377,24 @@ Business data and delivery infrastructure are protected differently. Business ta
 | Worker role `eca_worker` (`API_DB_WORKER_ROLE`, `API_WORKER_DATABASE_URL`; added in slice 0.3) | `worker` (SQLAlchemy and Procrastinate connections) | Same attributes as `eca_app` | Worker deployment only; the API process never holds them |
 | `app_readonly` | Future non-content analytics | NOBYPASSRLS; views only | Not created until a consumer exists |
 
+**Role lifecycle (who creates the roles).** Migrations never create, alter or drop roles and never set passwords. The two runtime roles are infrastructure, provisioned before the migrations that grant to them run:
+
+| Environment | Who creates `eca_app` and `eca_worker` | Credentials |
+|---|---|---|
+| Local development | `docker/postgres/init/01-roles.sql`, idempotent. Docker runs init scripts only on an empty data volume, so a volume created before slice 0.3 gets `eca_worker` by re-running the script (`docker compose exec db psql -U postgres -d eca -f /docker-entrypoint-initdb.d/01-roles.sql`) or by recreating the volume. A native PostgreSQL install runs the same script | Development-only passwords in the script and `.env.example` |
+| Tests and CI | `tests/conftest.py` creates the cluster roles `eca_test_app` and `eca_test_worker` (LOGIN, NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE) before migrating each throwaway database, and passes both names to Alembic (`-x runtime_role=…`, `-x worker_role=…`). `ECA_TEST_DATABASE_URL` must be a role that can create databases and roles (`postgres` in CI) | Test-only passwords |
+| Hosted | Provisioned outside the application, by infrastructure-as-code or an operator runbook, before the first release that contains slice 0.3; the procedure is written with the hosting decision (Q1) | Platform secret manager. `API_DATABASE_URL` only on the API deployment, `API_WORKER_DATABASE_URL` only on the worker deployment |
+
+The migration role needs no `CREATEROLE`. It owns every object it creates (`outbox`, `event_consumptions`, all Procrastinate objects) and grants on them as owner. `ALTER DEFAULT PRIVILEGES` applies only to objects created by the role that ran it, so **all migrations run as the same migration role**. Runtime roles own nothing.
+
+From migration `0002` on, each migration that grants to a runtime role first checks, and **fails loudly** with an error naming the role and pointing to this section, when:
+- either role does not exist;
+- either role is SUPERUSER or BYPASSRLS;
+- the two names are equal;
+- either role is a member of the other (`pg_auth_members`), because membership would let the API inherit worker privileges.
+
+Migration `0001` keeps its historical behaviour of skipping grants when the API role is missing. A database migrated that way fails at `0002` until both roles exist.
+
 **Privileges and policies**
 
 | Object | Owner | `eca_app` (API) | `eca_worker` | RLS | FORCE | Policies |
@@ -369,11 +402,33 @@ Business data and delivery infrastructure are protected differently. Business ta
 | User-owned business tables (every table with `user_id`, from slice 1.1) | Migration role | SELECT, INSERT, UPDATE, DELETE | SELECT, INSERT, UPDATE, DELETE | Yes | Yes | `<table>_user_isolation` for all roles: `USING` and `WITH CHECK` `user_id = eca_current_user_id()` (`eca.platform.rls.user_isolation_ddl`) |
 | `outbox` | Migration role | **INSERT only** | SELECT, INSERT, UPDATE, DELETE | Yes | Yes | `outbox_api_insert` `FOR INSERT TO eca_app WITH CHECK (user_id = eca_current_user_id())`; `outbox_worker_all` `FOR ALL TO eca_worker USING (true) WITH CHECK (true)` |
 | `event_consumptions` | Migration role | **None** | SELECT, INSERT, DELETE | Yes | Yes | `event_consumptions_worker_all` `FOR ALL TO eca_worker USING (true) WITH CHECK (true)` |
-| Procrastinate tables, sequences and functions | Migration role | **None** | DML on tables, USAGE on sequences, EXECUTE on functions | No (no `user_id`; Procrastinate internals) | — | Grants only |
-| `alembic_version` | Migration role | SELECT (readiness) | SELECT | No | — | — |
+| Procrastinate tables (`procrastinate_jobs`, `procrastinate_periodic_defers`, `procrastinate_events`, `procrastinate_workers`) | Migration role | **None** | SELECT, INSERT, UPDATE, DELETE | No (no `user_id`; Procrastinate internals) | — | Grants only |
+| Procrastinate sequences (serial and identity sequences of those tables) | Migration role | **None** | USAGE, SELECT | — | — | — |
+| Procrastinate functions (`procrastinate_*`) | Migration role | **None** | EXECUTE | — | — | EXECUTE revoked from PUBLIC |
+| `alembic_version` | Migration role | SELECT only (readiness) | SELECT only | No | — | — |
 | `eca_current_user_id()` | Migration role | EXECUTE | EXECUTE | — | — | `REVOKE ALL … FROM PUBLIC` |
+| Schema `public` | Migration role | USAGE (no CREATE) | USAGE (no CREATE) | — | — | — |
 
-The baseline migration grants DML on future tables to `eca_app` through default privileges. The slice 0.3 migration therefore **revokes** `eca_app`'s default grants on `outbox` (keeping INSERT), `event_consumptions` and every Procrastinate object, adds the same default privileges for `eca_worker`, and a test asserts the exact privilege matrix above. Every later migration that creates an infrastructure table states its grants explicitly.
+No runtime role holds TRUNCATE, REFERENCES or TRIGGER on any table, or UPDATE on any sequence. The API role has no privilege on any Procrastinate object, so it cannot put jobs on the queue.
+
+**Exact privilege mechanics (slice 0.3).**
+
+- **Default privileges are used, for both runtime roles.** Migration `0001` already set default privileges for the API role: SELECT, INSERT, UPDATE, DELETE on tables and USAGE, SELECT on sequences. Migration `0002` adds the same two default privileges for the worker role. Business tables from slice 1.1 then receive DML for both roles automatically, which matches the business-table row above. Default privileges on functions are not changed.
+- **Each migration that creates an infrastructure object trims the defaults explicitly, in the same transaction that creates the object.** The trims:
+  - `0003`: `REVOKE SELECT, UPDATE, DELETE ON outbox FROM <api>` (INSERT stays); `REVOKE ALL ON event_consumptions FROM <api>`; `REVOKE UPDATE ON event_consumptions FROM <worker>`. Consumption rows are only inserted (when consumed) and deleted (by purge), never updated, so UPDATE is not justified.
+  - `0004`: `REVOKE ALL` on every Procrastinate table and sequence `FROM <api>`; `REVOKE EXECUTE` on every `procrastinate_*` function `FROM PUBLIC`; `GRANT EXECUTE` on them `TO <worker>`. PostgreSQL grants EXECUTE on new functions to PUBLIC by default; that default is revoked per function, never schema-wide, because the extension functions of `vector`, `pg_trgm` and `citext` must stay callable.
+- **The `alembic_version` drift is corrected.** In `0001`, `GRANT … ON ALL TABLES` ran after Alembic had already created `alembic_version`, so the API role also holds INSERT, UPDATE and DELETE on it. This was verified on PostgreSQL 16 on 2026-10-02, contrary to the comment in `0001`. Migration `0002` revokes those three privileges from the API role and grants SELECT to the worker role. Its downgrade does not restore them.
+- `<api>` and `<worker>` are the configured names (`API_DB_RUNTIME_ROLE`, `API_DB_WORKER_ROLE`; the test roles in CI). Policies name them the same way.
+
+**What the privilege-matrix test asserts** (PostgreSQL, on a freshly migrated database with no test tables, after `alembic upgrade head` and again after down/up):
+
+1. For the API role, the worker role and PUBLIC, on every table in schema `public`: each of SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES and TRIGGER (`has_table_privilege`) equals the table above, and PUBLIC holds none of them. For every sequence: USAGE, SELECT, UPDATE. For every `procrastinate_*` function and `eca_current_user_id()`: EXECUTE.
+2. `pg_default_acl` for the migration role contains exactly the table and sequence defaults for the two runtime roles.
+3. `relrowsecurity` and `relforcerowsecurity` are true on `outbox` and `event_consumptions`. `pg_policies` on them equals exactly `outbox_api_insert` (INSERT, API role, `WITH CHECK (user_id = eca_current_user_id())`), `outbox_worker_all` (ALL, worker role, `true`/`true`) and `event_consumptions_worker_all` (ALL, worker role, `true`/`true`).
+4. Both runtime roles are NOSUPERUSER, NOBYPASSRLS, NOCREATEDB and NOCREATEROLE, distinct, and not members of each other.
+5. Every table the migrations create in schema `public` is classified as either an infrastructure table listed above or a business table with the `_user_isolation` policy. A new table that is neither fails the test.
+
+Behavioural checks (what each role can actually do) are in RT-15 (§21).
 
 **How `SET LOCAL app.user_id` behaves.** The unit of work runs `set_config('app.user_id', <uuid>, true)` (transaction-local) as its first statement. The value comes only from the authenticated session (API) or from the event or job being processed (worker), never from request input. It disappears at commit or rollback, so a pooled connection never carries it to the next transaction (RT-15).
 
@@ -392,6 +447,20 @@ The baseline migration grants DML on future tables to `eca_app` through default 
 **Grants and RLS together.** Grants decide which operations a role may attempt on a table. RLS decides which rows. Infrastructure tables use both: if a future migration accidentally granted `eca_app` SELECT on `outbox`, FORCE RLS without a matching policy would still return zero rows.
 
 **Residual risk.** RLS keyed on a session setting protects against missing `WHERE user_id` filters and pooled-connection leaks. It cannot stop code that runs arbitrary SQL as `eca_app`, because such code could call `set_config` itself. Mitigations: parameterized SQLAlchemy only, no SQL built from input, the planner cannot write SQL (`TECHNICAL_DESIGN.md` §17.3), and explicit `user_id` predicates in every repository query. Infrastructure isolation does not depend on this, because it uses role grants.
+
+### 7.7 Slice 0.3 migrations
+
+One concern per revision (§17.4). Each revision creates its objects **together with** their grants, revocations and RLS, in one transaction (`transaction_per_migration`). So no committed intermediate state ever exposes an infrastructure table to the API role. The chain is linear:
+
+| Revision | Depends on | Owns | Does not |
+|---|---|---|---|
+| `0002_runtime_role_access` | `0001` | The role checks of §7.6 (both runtime roles exist, are safe, distinct and not members of each other). For the worker role: USAGE on schema `public`, EXECUTE on `eca_current_user_id()`, SELECT on `alembic_version`, and default privileges (SELECT, INSERT, UPDATE, DELETE on tables; USAGE, SELECT on sequences). Removes the API role's INSERT, UPDATE and DELETE on `alembic_version` (§7.6) | Create tables, roles or passwords |
+| `0003_outbox` | `0002` (the worker defaults must exist before the tables, and both roles must exist for the policies) | `outbox`, `event_consumptions`, `ix_outbox_pending`, `ix_outbox_user`, FK `event_consumptions.event_id → outbox(id)`; the trims of §7.6; ENABLE and FORCE RLS; the three policies | Add any FK to `users` (§7.3.1) |
+| `0004_procrastinate_schema` | `0003` (only for the linear chain; Procrastinate objects do not reference platform tables) | The Procrastinate schema of the pinned version (§15), executed from a vendored copy `backend/migrations/sql/procrastinate_<version>_schema.sql`; the Procrastinate trims and the EXECUTE grants of §7.6 | Call `procrastinate schema --apply`, or read `schema.sql` from the installed package at migration time (the revision must not change when the package changes) |
+
+Downgrades reverse each revision: `0004` drops the Procrastinate tables, functions and types; `0003` drops both tables; `0002` removes the worker grants and defaults (the `alembic_version` correction is not reverted). The integration test runs `0001` → head → base → head and checks the privilege matrix after each upgrade.
+
+**Procrastinate schema checks and upgrades.** A test applies the installed package's `schema.sql` (`procrastinate.schema.SchemaManager.get_schema()`) to a separate empty database. It then compares the Procrastinate catalog with the migrated database: tables and columns, types, indexes, functions with arguments and source, and triggers. A version bump without a matching migration therefore fails CI. Upgrading Procrastinate means pinning the new version and adding a new revision. That revision applies Procrastinate's own migration files between the two versions, vendored, followed by the same trims and grants. The `0004` file never changes.
 
 ---
 
@@ -698,7 +767,7 @@ Webhooks are **synchronization signals**, never authoritative data:
 | Calendar | 600 requests per user per minute; 10,000 per project per minute; `403/429 usageLimits` | In-job limit 300/min |
 | Gemini | Per-model RPM/TPM per account tier | Queue concurrency caps (`extract` 8, `ai_standard` 4); 429 → backoff, then fallback model |
 
-Backoff: `min(base · 2^attempt + random(0–1 s), max)`; `Retry-After` honoured; ±25% jitter on periodic schedules (Google guidance). Retry limits per task class in §14.3.
+Backoff: `min(base · 2^(n−1) + random(0–1 s), max)` after the n-th failed attempt (§14.3); `Retry-After` honoured; ±25% jitter on periodic schedules (Google guidance). Retry limits per task class in §14.3.
 
 ### 11.7 Crash recovery summary
 
@@ -821,7 +890,7 @@ Content type `application/problem+json`. FastAPI's `RequestValidationError` is m
 
 ### 14.3 Worker retry policy
 
-`delay = min(base · 2^attempt + random(0–1 s), max_delay)`; provider `Retry-After` overrides.
+`delay = min(base · 2^(n−1) + random(0–1 s), max_delay)`, where n ≥ 1 is the number of failed attempts so far, so the first retry waits about `base`. "Max attempts" counts every run, including the first. A provider `Retry-After` overrides the delay.
 
 | Task class | base | max_delay | Max attempts | After max |
 |---|---|---|---|---|
@@ -833,6 +902,27 @@ Content type `application/problem+json`. FastAPI's `RequestValidationError` is m
 
 Non-retryable: validation errors, `AuthRevoked` (connection → `needs_reauth`), `Gone`, safety blocks. Procrastinate's stalled-job recovery re-queues jobs whose worker died.
 
+**Handler jobs on Procrastinate (slice 0.3).** Procrastinate is pinned to **3.10.0** (§15). Its built-in `RetryStrategy` computes `wait + linear_wait · attempts + exponential_wait ** (attempts + 1)` from integer seconds. Exponential growth there uses the base as the exponent's base, not as a multiplier, and there is no jitter and no cap. So it cannot produce `5 s · 2^(n−1) + random(0–1 s)` capped at 10 min (inspected in `procrastinate/retry.py`, 3.10.0). The smallest custom strategy is enough:
+
+- `HandlerRetryStrategy(procrastinate.BaseRetryStrategy)` in `eca.platform`. Fields: `base_s = 5`, `max_delay_s = 600`, `max_attempts = 8`, a list of non-retryable exception types (`ValidationFailed`, `AuthRevoked`, `Gone`), and an injectable clock and random source for unit tests.
+- It implements only `get_retry_decision(exception, job)`. Procrastinate's `job.attempts` is the number of earlier runs (0 on the first run), so n = `job.attempts + 1`.
+- It returns `None` (no retry) when the exception is non-retryable or n ≥ 8. Otherwise it returns `RetryDecision(retry_at = now + min(5 · 2^(n−1) + U[0, 1), 600) s)`. Retry waits are therefore about 5, 10, 20, 40, 80, 160 and 320 s, plus jitter. The 10-minute cap is part of the formula but is not reached within 8 attempts.
+- When it returns `None`, Procrastinate marks the job `failed`. That is the "dead job". The strategy logs `handler_job_dead` with `event_id`, `handler`, `job_id` and the error class (never content).
+- In slice 0.3 dead jobs are reported by that log line only. They are not replayed automatically, and `eca ops` replay of dead jobs comes later (§14.4).
+
+**Relationship to outbox dispatch attempts.** These are two separate counters:
+- `outbox.attempts` counts failures to turn an event into jobs (defer errors, unregistered type): base 1 s, max 5 min, `failed` at 10 (§7.3.2).
+- `procrastinate_jobs.attempts` counts runs of one handler job.
+
+Once a row is `dispatched`, handler failures never send it back to `pending` and never touch `outbox.attempts`. The reconciler does not touch handler jobs (§7.5).
+
+**Stalled jobs.** Procrastinate 3.10.0 workers record heartbeats in `procrastinate_workers` (defaults: update every 10 s, stalled after 30 s). The task `recover_stalled_jobs` (§15) runs once when the worker starts and then every minute. Each pass does three things:
+- calls `job_manager.get_stalled_jobs(seconds_since_heartbeat = stalled timeout)`;
+- re-queues each job with `retry_job` (no delay);
+- prunes the stalled workers.
+
+`retry_job` increments the job's `attempts`, so a worker death counts as one of the 8 attempts. This Procrastinate-internal heartbeat is used only for stalled-job recovery. It is not a health or readiness endpoint (§16.5).
+
 ### 14.4 Dead letters and replay
 
 `eca ops` CLI: list `needs_attention`, `apply_failed`, `failed` outbox, dead jobs; `replay --stage …`, `refold`, `reapply --user …`, `reextract --window … --dry-run`, `outbox retry`.
@@ -840,6 +930,8 @@ Non-retryable: validation errors, `AuthRevoked` (connection → `needs_reauth`),
 ---
 
 ## 15. Jobs and queues
+
+Procrastinate is pinned exactly (`procrastinate==3.10.0`, slice 0.3; requires Python ≥ 3.10 and brings `psycopg[pool]`). Its schema is applied only by Alembic (§7.7).
 
 | Queue | Concurrency (per worker) | Tasks |
 |---|---|---|
@@ -874,6 +966,7 @@ Non-retryable: validation errors, `AuthRevoked` (connection → `needs_reauth`),
 | `meeting_asks` (AI-11) | User opens prep view with non-empty sections | `asks:{meeting}:{version}` | Versioned |
 | `daily_briefing` (queue `events`; deterministic, no AI) | Before work start, active users only | `brief:{user}:{date}` | One per user-day |
 | `reconcile` | Every 5 min | `reconcile` | Re-enqueue only (slice 0.3: outbox re-dispatch; slice 1.3 adds source-item stages, §7.5) |
+| `recover_stalled_jobs` (slice 0.3) | Once at worker start, then every 1 min (`schedule`) | `recover_stalled_jobs` | Re-queues jobs of workers whose Procrastinate heartbeat is stale (§14.3) |
 | `outbox_dispatch` | Worker loop, every 1 s | Row-level `SKIP LOCKED` | §7.4 |
 | `retention_purge` | Nightly | `retention` | Batched, idempotent |
 | `delete_account`, `purge_source` | User request | `delete:{user}` / `purge:{conn}` | Resumable |
@@ -1016,7 +1109,7 @@ Why cursor pagination: the collections here (changes, events, needs-response, it
 | GET | `/api/v1/data-summary` | What is connected, stored, retained |
 | POST | `/api/v1/exports` · GET `/api/v1/exports/{export_id}` | Export job |
 
-**Health**: `GET /healthz`, `GET /readyz` (DB reachable, schema at head, dispatcher heartbeat for workers).
+**Health**: `GET /healthz`, `GET /readyz` (API process: database reachable, schema at head). The worker has no HTTP server and no health or readiness check in slice 0.3. In 0.3, dispatch progress is observed through the oldest-pending age and `failed` count that the reconciler logs (§7.5, §19). A worker liveness or readiness signal (for example a dispatcher heartbeat) is designed together with the hosting decision (Q1), because its form depends on the platform's probes. It is not part of slice 0.3. Procrastinate's internal worker heartbeat (§14.3) is a different thing: it serves stalled-job recovery only.
 
 ### 16.6 Inbound rate limits
 
@@ -1290,7 +1383,7 @@ Core tables contain no provider-specific columns; provider IDs live only in `sou
 | RT-12 | Extract/apply code paths attempt a write to a SOURCE table (test-mode audit trigger) | Write rejected; test fails if any such write occurs |
 | RT-13 | R2 rebuild after user corrections | All user-authored values and user-touched item IDs preserved |
 | RT-14 | R2 rebuild equivalence | Rebuilt AI-derived state equals pre-rebuild state (excluding IDs of AI-only items) |
-| RT-15 | RLS with `app.user_id` unset and set to another user; from slice 0.3 also the role model of §7.6 | Zero rows returned; writes rejected; context does not leak across pooled transactions. From 0.3: `eca_app` cannot read, update or delete any `outbox` row, cannot insert one for another user or with NULL `user_id`, and has no access to `event_consumptions` or Procrastinate objects, whatever `app.user_id` is; `eca_worker` with `app.user_id` unset sees zero business rows; privilege matrix equals §7.6 |
+| RT-15 | RLS with `app.user_id` unset and set to another user; from slice 0.3 also the role model of §7.6 | Zero rows returned; writes rejected; context does not leak across pooled transactions. From 0.3: with `app.user_id` = A, `eca_app` publishes A's event through `platform.publish` (a plain insert, §7.3.3), and the worker role then sees the row. Whatever `app.user_id` is, `eca_app` fails with a privilege error (not zero rows) on SELECT, `INSERT … RETURNING`, UPDATE and DELETE on `outbox`, also when rows of other users exist. It cannot insert a row for another user or with NULL `user_id` (RLS violation). It has no access to `event_consumptions` or to any Procrastinate table or function. `eca_worker` with `app.user_id` unset sees zero business rows. The privilege matrix equals §7.6 |
 
 **RT-01 levels.** The eventual assertion above does not change. It is built in two levels:
 
@@ -1300,6 +1393,19 @@ Core tables contain no provider-specific columns; provider IDs live only in `sou
 | Pipeline | 1.3 (sync → normalize, fake connector) and 1.4 (normalize → extract → apply, recorded AI responses) | `world_v1` messages through the real stages | The full assertion: normalized, extracted and applied exactly once; AI call count 1 | — |
 
 RT-05 is defined on infrastructure only and is complete at slice 0.3; it keeps running unchanged once real handlers exist. RT-02, RT-02b, RT-04, RT-06 and RT-07 cover the neighbouring pipeline crash and replay cases.
+
+**Slice 0.3 crash-test harness.** Synthetic handlers and crash tests must not leave anything in production code paths except inert crash hooks.
+
+| Concern | Decision |
+|---|---|
+| Registries | Event types and handlers are recorded in registry objects. `eca.platform` exposes one default registry, which the production decorators (`register_event`, `handles`) fill. The dispatcher and the worker take a registry as an argument. In-process tests build their own registry, so test types never reach the default one |
+| Worker composition | `eca.worker` exposes a public function that builds and runs the worker from a registry and a `WorkerConfig`. The config holds queue concurrency, dispatcher tick and batch size, Procrastinate heartbeat interval and stalled timeout, the handler retry strategy, and dispatch backoff. `python -m eca.worker` builds the default registry by importing the domain modules' handler registrations explicitly (none in 0.3) and builds `WorkerConfig` from settings and §14.3/§15 defaults. The production entry point has **no** option, setting or environment variable that loads extra modules |
+| Where test handlers live | `backend/tests/reliability/support/synthetic.py`: test-only event types (prefix `test.`), payload models and handlers. Each handler appends to `rt_effects`. The flaky handler, for case (f), decides from Procrastinate's job attempt number (`JobContext`), not from database state, because a failed attempt rolls back |
+| Effect table | `rt_effects (id bigint generated always as identity, event_id uuid, handler text, user_id uuid NULL, seen_app_user_id text NULL, created_at timestamptz DEFAULT now())`, with **no unique constraint**. `seen_app_user_id` records `current_setting('app.user_id', true)` inside the handler, which proves that the wrapper set the user context. It is created by a test fixture with the migration role in the throwaway database, never by Alembic, and only the test worker role gets SELECT and INSERT on it |
+| How the subprocess loads them | Tests start `python -m tests.reliability.support.worker_main --mode worker` or `--mode dispatcher` (working directory `backend/`). This test-only launcher imports `synthetic` into a registry and calls `eca.worker`'s public run function with a fast `WorkerConfig`: handler retry base 0.05 s, heartbeat 0.5 s, stalled timeout 2 s, tick 0.1 s. The production `python -m eca.worker` is never used to load test code |
+| Why production cannot load them | `tests/` is not part of the installed package (`[tool.setuptools.packages.find] include = ["eca*"]`) and must not be copied into the deployment image. No production code imports `tests`, and the production entry point has no module-loading hook |
+| Crash injection | Environment variable **`ECA_TEST_CRASH_POINT`** = one of `dispatch.after_claim`, `dispatch.after_defer`, `dispatch.before_commit`, `handler.after_consumption`, `handler.before_commit`, `handler.after_commit`. It is read once at process start by `eca.platform` (both entry points call the same setup). An unknown value is a startup error. A set value while `API_ENV` is production is a startup error: the process refuses to start rather than ignoring it. When armed, the first time the named point is reached the process calls `os._exit(97)` with no cleanup. Exit code 97 lets the test assert that the crash happened where intended. Tests set the variable only for the first subprocess and restart without it |
+| Restart and recovery in tests | After a crash the test starts a fresh launcher process. Dispatcher crashes leave rows `pending`, which the next tick claims. Handler crashes leave the job `doing` under a dead worker. The test waits longer than the fast config's 2 s stalled timeout and restarts the launcher; the start-up stalled-job recovery pass (§14.3) re-queues the job. The test then checks `rt_effects`, `event_consumptions`, `outbox` and `procrastinate_jobs` |
 
 ---
 

@@ -1,6 +1,7 @@
--- Local development roles (TECHNICAL_DESIGN.md §17.3).
+-- Local development roles (BACKEND_DESIGN.md §7.6). Migrations never create roles.
 -- postgres  : schema owner, used only by migrations (app_migrator).
--- eca_app   : runtime role for api/worker; DML only, subject to row-level security.
+-- eca_app   : API runtime role; DML only, subject to row-level security.
+-- eca_worker: worker runtime role, added to this script in slice 0.3.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'eca_app') THEN
