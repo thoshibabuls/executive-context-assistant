@@ -1,0 +1,37 @@
+# Synthetic chain (CONTEXT_EVALUATION.md §6.1). Fictional people and companies. Labels are draft.
+id: CC-07
+title: Two different commitments by the same person in one thread
+tags: [email_to_email, linking_precision]
+user: {person: p_user, timezone: America/Los_Angeles}
+world: world_v1
+label_status: draft
+sources:
+  - id: e1
+    kind: email
+    occurred_at: 2026-09-28T13:00:00-07:00
+    from: p_john_hv
+    to: [p_user]
+    subject: Next steps
+    body: I will send the SOC 2 bridge letter by October 5, and I will send the pricing sheet by October 7.
+  - id: e2
+    kind: email
+    occurred_at: 2026-10-01T10:10:00-07:00
+    from: p_john_hv
+    to: [p_user]
+    subject: "Re: Next steps"
+    body: Quick update, the pricing sheet will be a few days late; the bridge letter is unaffected.
+expected_state:
+  - at: 2026-10-01T11:00:00-07:00
+    items:
+      - {key: wi_bridge, type: commitment, owner: p_john_hv, direction: waiting_for, due: 2026-10-05,
+         reported_status: null, evidence: [e1], item_count_matching: 1}
+      - {key: wi_pricing, type: commitment, owner: p_john_hv, direction: waiting_for, due: 2026-10-07,
+         reported_status: delayed, reported_by: p_john_hv, evidence: [e1, e2], item_count_matching: 1}
+queries:
+  - id: q1
+    as_of: 2026-10-01T11:00:00-07:00
+    scenario: S7_waiting_for
+    text: What is John late on?
+    required_items: [wi_pricing]
+    forbidden_items: [wi_bridge]
+    expected_tier: deterministic

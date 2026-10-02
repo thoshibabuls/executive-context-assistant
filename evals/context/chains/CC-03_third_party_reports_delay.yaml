@@ -1,0 +1,38 @@
+# Synthetic chain (CONTEXT_EVALUATION.md §6.1). Fictional people and companies. Labels are draft.
+id: CC-03
+title: Commitment, then a third party reports that it will be late
+tags: [email_to_email, reported_status, attribution]
+user: {person: p_user, timezone: America/Los_Angeles}
+world: world_v1
+label_status: draft
+sources:
+  - id: e1
+    kind: email
+    occurred_at: 2026-09-29T09:30:00-07:00
+    from: p_john_hv
+    to: [p_user]
+    subject: Vendor risk report
+    body: I will send the vendor risk report by October 9.
+  - id: e2
+    kind: email
+    occurred_at: 2026-10-02T13:15:00-07:00
+    from: p_sarah
+    to: [p_user]
+    subject: Vendor sync notes
+    body: Heads up, John's vendor risk report will be late, his team is short-staffed this week.
+expected_state:
+  - at: 2026-10-02T14:00:00-07:00
+    items:
+      - {key: wi_vendorrisk, type: commitment, owner: p_john_hv, counterparty: p_user, direction: waiting_for,
+         due: 2026-10-09, lifecycle: open, reported_status: delayed, reported_by: p_sarah, evidence: [e1, e2],
+         item_count_matching: 1}
+queries:
+  - id: q1
+    as_of: 2026-10-02T14:00:00-07:00
+    scenario: S6_cross_email
+    text: Is the vendor risk report on track?
+    required_items: [wi_vendorrisk]
+    required_facts: ["Sarah says it will be late", "still due October 9 per John"]
+    forbidden_facts: ["John said it will be late"]
+    must_cite: [e1, e2]
+    expected_tier: T2

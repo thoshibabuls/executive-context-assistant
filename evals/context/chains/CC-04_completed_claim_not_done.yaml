@@ -1,0 +1,38 @@
+# Synthetic chain (CONTEXT_EVALUATION.md §6.1). Fictional people and companies. Labels are draft.
+id: CC-04
+title: Owner claims completion; lifecycle stays open until the user confirms
+tags: [email_to_email, completed_claim, no_false_closure]
+user: {person: p_user, timezone: America/Los_Angeles}
+world: world_v1
+label_status: draft
+sources:
+  - id: e1
+    kind: email
+    occurred_at: 2026-09-30T10:00:00-07:00
+    from: p_jon_tc
+    to: [p_user]
+    subject: Migration runbook
+    body: I will send the migration runbook by Friday.
+  - id: e2
+    kind: email
+    occurred_at: 2026-10-02T16:05:00-07:00
+    from: p_jon_tc
+    to: [p_user]
+    subject: "Re: Migration runbook"
+    body: I've attached the migration runbook, let me know if anything is missing.
+expected_state:
+  - at: 2026-10-02T17:00:00-07:00
+    items:
+      - {key: wi_runbook, type: commitment, owner: p_jon_tc, counterparty: p_user, direction: waiting_for,
+         due: 2026-10-02, lifecycle: open, reported_status: completed_claim, reported_by: p_jon_tc,
+         evidence: [e1, e2], item_count_matching: 1}
+queries:
+  - id: q1
+    as_of: 2026-10-02T17:00:00-07:00
+    scenario: S7_waiting_for
+    text: Did Jon send the migration runbook?
+    required_items: [wi_runbook]
+    required_facts: ["Jon says he sent it", "confirm?"]
+    forbidden_facts: ["the runbook is done"]
+    must_cite: [e2]
+    expected_tier: T1

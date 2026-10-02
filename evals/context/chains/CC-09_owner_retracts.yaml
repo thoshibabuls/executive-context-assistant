@@ -1,0 +1,37 @@
+# Synthetic chain (CONTEXT_EVALUATION.md §6.1). Fictional people and companies. Labels are draft.
+id: CC-09
+title: Owner retracts the commitment
+tags: [email_to_email, withdrawn, latest_state]
+user: {person: p_user, timezone: America/Los_Angeles}
+world: world_v1
+label_status: draft
+sources:
+  - id: e1
+    kind: email
+    occurred_at: 2026-09-29T10:00:00-07:00
+    from: p_grace
+    to: [p_user]
+    subject: Contract redlines
+    body: I will send the contract redlines by October 7.
+  - id: e2
+    kind: email
+    occurred_at: 2026-10-02T09:00:00-07:00
+    from: p_grace
+    to: [p_user]
+    subject: "Re: Contract redlines"
+    body: Unfortunately we won't be able to provide the redlines; the client asked us to pause the work.
+expected_state:
+  - at: 2026-10-02T10:00:00-07:00
+    items:
+      - {key: wi_redlines, owner: p_grace, direction: waiting_for, lifecycle: open, reported_status: withdrawn,
+         reported_by: p_grace, evidence: [e1, e2], item_count_matching: 1}
+queries:
+  - id: q1
+    as_of: 2026-10-02T10:00:00-07:00
+    scenario: S6_cross_email
+    text: When do the contract redlines arrive?
+    required_items: [wi_redlines]
+    required_facts: ["Grace said they will not provide the redlines"]
+    forbidden_facts: ["due October 7"]
+    must_cite: [e2]
+    expected_tier: T2

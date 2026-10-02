@@ -10,10 +10,19 @@ Rules checked on every direct import inside ``eca``:
    and tasks do not import each other.
 3. **No HTTP in core.** Shared modules and every domain submodule except ``router`` (including
    package roots) must not import HTTP framework packages.
+
+Client packages outside ``eca`` (``eca_evals``) are held to rules 1 and 3: they use ``eca``
+through its public package roots only (AI_EVALUATION.md §3.1).
+
+A second contract, ``RestrictedImportContract``, confines one external package to its allowed
+importers (``google.genai`` to ``eca.intelligence``, BACKEND_DESIGN.md §5.5). grimp squashes
+external packages to their top-level name (``google``), so the import statements themselves are
+inspected.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -65,8 +74,9 @@ def find_violations(
     shared_modules: list[str],
     composition_modules: list[str],
     http_packages: list[str],
+    client_modules: Iterable[str] = (),
 ) -> list[Violation]:
-    internal = [*domain_modules, *shared_modules, *composition_modules]
+    internal = [*domain_modules, *shared_modules, *composition_modules, *client_modules]
     violations: list[Violation] = []
     for importer, imported in imports:
         importer_owner = _owner(importer, internal)
@@ -108,11 +118,14 @@ class ModuleBoundaryContract(Contract):
     shared_modules = fields.ListField(subfield=fields.StringField())
     composition_modules = fields.ListField(subfield=fields.StringField())
     http_packages = fields.ListField(subfield=fields.StringField())
+    client_modules = fields.ListField(subfield=fields.StringField(), default=[])
 
     def check(self, graph: Any, verbose: bool) -> ContractCheck:
+        clients = list(self.client_modules)  # type: ignore[call-overload]
+        roots = ["eca", *clients]
         pairs: list[tuple[str, str]] = []
         for importer in graph.modules:
-            if not (importer == "eca" or importer.startswith("eca.")):
+            if _owner(importer, roots) is None:
                 continue
             for imported in graph.find_modules_directly_imported_by(importer):
                 pairs.append((importer, imported))
@@ -122,6 +135,61 @@ class ModuleBoundaryContract(Contract):
             shared_modules=list(self.shared_modules),  # type: ignore[call-overload]
             composition_modules=list(self.composition_modules),  # type: ignore[call-overload]
             http_packages=list(self.http_packages),  # type: ignore[call-overload]
+            client_modules=clients,
+        )
+        return ContractCheck(kept=not violations, metadata={"violations": violations})
+
+    def render_broken_contract(self, check: ContractCheck) -> None:
+        for v in check.metadata["violations"]:
+            output.print_error(v.describe(), bold=False)
+            output.new_line()
+
+
+def _statement_pattern(package: str) -> re.Pattern[str]:
+    """Matches ``import a.b``, ``from a.b import x``, ``from a import b`` for ``package`` = ``a.b``."""
+    parent, _, leaf = package.rpartition(".")
+    dotted = re.escape(package)
+    alternatives = [rf"^\s*import\s+{dotted}\b", rf"^\s*from\s+{dotted}(\.|\s)"]
+    if parent:
+        alternatives.append(rf"^\s*from\s+{re.escape(parent)}\s+import\s+.*\b{re.escape(leaf)}\b")
+    return re.compile("|".join(alternatives))
+
+
+def find_restricted_imports(
+    statements: Iterable[tuple[str, str]], *, package: str, allowed_importers: list[str]
+) -> list[Violation]:
+    """``statements`` are (importer, import statement text) pairs."""
+    pattern = _statement_pattern(package)
+    return [
+        Violation("restricted-import", importer, package)
+        for importer, line in statements
+        if pattern.search(line) and _owner(importer, allowed_importers) is None
+    ]
+
+
+class RestrictedImportContract(Contract):
+    type_name = "eca_restricted_imports"
+
+    package = fields.StringField()
+    allowed_importers = fields.ListField(subfield=fields.StringField())
+    source_packages = fields.ListField(subfield=fields.StringField())
+
+    def check(self, graph: Any, verbose: bool) -> ContractCheck:
+        package = str(self.package)
+        top = package.split(".", 1)[0]
+        sources = list(self.source_packages)  # type: ignore[call-overload]
+        statements: list[tuple[str, str]] = []
+        for importer in graph.modules:
+            if _owner(importer, sources) is None:
+                continue
+            for imported in graph.find_modules_directly_imported_by(importer):
+                if imported == top or imported.startswith(top + "."):
+                    for detail in graph.get_import_details(importer=importer, imported=imported):
+                        statements.append((importer, str(detail["line_contents"])))
+        violations = find_restricted_imports(
+            statements,
+            package=package,
+            allowed_importers=list(self.allowed_importers),  # type: ignore[call-overload]
         )
         return ContractCheck(kept=not violations, metadata={"violations": violations})
 

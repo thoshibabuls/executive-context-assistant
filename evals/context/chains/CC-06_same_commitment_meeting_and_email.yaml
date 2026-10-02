@@ -1,0 +1,37 @@
+# Synthetic chain (CONTEXT_EVALUATION.md §6.1). Fictional people and companies. Labels are draft.
+id: CC-06
+title: Same commitment stated in a meeting and again by email the next day
+tags: [cross_source, merge, no_duplicate]
+user: {person: p_user, timezone: America/Los_Angeles}
+world: world_v1
+label_status: draft
+sources:
+  - id: m1
+    kind: meeting_transcript
+    occurred_at: 2026-09-29T14:00:00-07:00
+    attendees: [p_user, p_mei, p_oscar]
+    transcript: |
+      WEBVTT
+
+      00:21:10.000 --> 00:21:16.000
+      <v Mei Lin>I'll send the data processing addendum by October 6.
+  - id: e1
+    kind: email
+    occurred_at: 2026-09-30T08:45:00-07:00
+    from: p_mei
+    to: [p_user]
+    subject: Data processing addendum
+    body: As promised yesterday, I'll send the data processing addendum by October 6.
+expected_state:
+  - at: 2026-09-30T09:00:00-07:00
+    items:
+      - {key: wi_dpa, type: commitment, owner: p_mei, counterparty: p_user, direction: waiting_for, due: 2026-10-06,
+         lifecycle: open, evidence: [m1, e1], item_count_matching: 1}
+queries:
+  - id: q1
+    as_of: 2026-09-30T09:00:00-07:00
+    scenario: S7_waiting_for
+    text: What is Mei sending me?
+    required_items: [wi_dpa]
+    must_cite: [m1, e1]
+    expected_tier: deterministic

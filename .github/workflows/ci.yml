@@ -28,6 +28,8 @@ jobs:
         run: mypy
       - name: import boundaries
         run: lint-imports
+      - name: gate A0 (evaluation data hashes, splits, contamination)
+        run: python -m eca_evals gate-a0
 
   test:
     runs-on: ubuntu-latest

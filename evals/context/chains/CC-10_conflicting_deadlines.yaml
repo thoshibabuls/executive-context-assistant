@@ -1,0 +1,36 @@
+# Synthetic chain (CONTEXT_EVALUATION.md §6.1). Fictional people and companies. Labels are draft.
+id: CC-10
+title: Conflicting deadlines from two equal-authority participants
+tags: [conflict, attribution]
+user: {person: p_user, timezone: America/Los_Angeles}
+world: world_v1
+label_status: draft
+sources:
+  - id: e1
+    kind: email
+    occurred_at: 2026-09-30T09:00:00-07:00
+    from: p_amara
+    to: [p_user, p_pavel]
+    subject: Freight API cutover
+    body: We will deliver the API cutover plan by October 12.
+  - id: e2
+    kind: email
+    occurred_at: 2026-09-30T11:30:00-07:00
+    from: p_pavel
+    to: [p_user, p_amara]
+    subject: "Re: Freight API cutover"
+    body: Our team will deliver the API cutover plan by October 9.
+expected_state:
+  - at: 2026-09-30T12:00:00-07:00
+    items:
+      - {key: wi_cutover, owner: p_amara, direction: waiting_for, lifecycle: open, has_conflict: true,
+         evidence: [e1, e2], item_count_matching: 1}
+queries:
+  - id: q1
+    as_of: 2026-09-30T12:00:00-07:00
+    scenario: S6_cross_email
+    text: When is the API cutover plan due?
+    required_items: [wi_cutover]
+    must_mention_conflict: true
+    must_cite: [e1, e2]
+    expected_tier: T2

@@ -1,0 +1,41 @@
+# Synthetic chain (CONTEXT_EVALUATION.md §6.1). Fictional people and companies. Labels are draft.
+id: CC-05
+title: User marks the commitment done; a later email from the owner does not reopen it
+tags: [user_authority, no_reopen, no_duplicate]
+user: {person: p_user, timezone: America/Los_Angeles}
+world: world_v1
+label_status: draft
+sources:
+  - id: e1
+    kind: email
+    occurred_at: 2026-09-28T09:00:00-07:00
+    from: p_amara
+    to: [p_user]
+    subject: Load-test results
+    body: I will send the load-test results by October 1.
+  - id: u1
+    kind: user_action
+    occurred_at: 2026-10-01T11:00:00-07:00
+    action: mark_done
+    target: wi_loadtest
+  - id: e2
+    kind: email
+    occurred_at: 2026-10-01T15:30:00-07:00
+    from: p_amara
+    to: [p_user]
+    subject: "Re: Load-test results"
+    body: Sending the load-test results now.
+expected_state:
+  - at: 2026-10-01T12:00:00-07:00
+    items:
+      - {key: wi_loadtest, owner: p_amara, direction: waiting_for, lifecycle: done, evidence: [e1]}
+  - at: 2026-10-01T16:00:00-07:00
+    items:
+      - {key: wi_loadtest, lifecycle: done, evidence: [e1, e2], item_count_matching: 1}
+queries:
+  - id: q1
+    as_of: 2026-10-01T16:00:00-07:00
+    scenario: S7_waiting_for
+    text: What am I waiting for?
+    forbidden_items: [wi_loadtest]
+    expected_tier: deterministic

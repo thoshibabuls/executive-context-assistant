@@ -1,0 +1,40 @@
+# Synthetic chain (CONTEXT_EVALUATION.md §6.1). Fictional people and companies. Labels are draft.
+id: CC-02
+title: Commitment in email, owner moves the deadline in a later email
+tags: [email_to_email, due_changed, status_fold]
+user: {person: p_user, timezone: America/Los_Angeles}
+world: world_v1
+label_status: draft
+sources:
+  - id: e1
+    kind: email
+    occurred_at: 2026-09-28T11:05:00-07:00
+    from: p_hana
+    to: [p_user]
+    subject: Pen-test report
+    body: I will send the pen-test report by October 8.
+  - id: e2
+    kind: email
+    occurred_at: 2026-10-05T14:20:00-07:00
+    from: p_hana
+    to: [p_user]
+    subject: "Re: Pen-test report"
+    body: Sorry, I need until the 10th to finish the pen-test report.
+expected_state:
+  - at: 2026-09-28T12:00:00-07:00
+    items:
+      - {key: wi_pentest, type: commitment, owner: p_hana, counterparty: p_user, direction: waiting_for,
+         due: 2026-10-08, lifecycle: open, evidence: [e1]}
+  - at: 2026-10-05T15:00:00-07:00
+    items:
+      - {key: wi_pentest, due: 2026-10-10, lifecycle: open, evidence: [e1, e2], item_count_matching: 1}
+queries:
+  - id: q1
+    as_of: 2026-10-05T15:00:00-07:00
+    scenario: S7_waiting_for
+    text: When is the pen-test report due?
+    required_items: [wi_pentest]
+    required_facts: ["due October 10", "moved from October 8"]
+    must_mention_change: deadline moved from Oct 8 to Oct 10
+    must_cite: [e1, e2]
+    expected_tier: deterministic

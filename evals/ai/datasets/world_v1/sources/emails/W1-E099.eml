@@ -1,0 +1,15 @@
+From: Marcus Oyelaran <marcus.oyelaran@halvorsen.example>
+To: Avery Lindqvist <avery@brightwater.example>
+Subject: FYI
+Date: Wed, 16 Sep 2026 08:12:00 -0700
+Message-ID: <w1-e099@world-v1.example>
+X-ECA-Synthetic: world_v1; fictional people and organizations
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Hi Avery,
+
+FYI: the nightly ETL now runs in under forty minutes. No action needed.
+
+Marcus

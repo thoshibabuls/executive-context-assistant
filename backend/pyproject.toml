@@ -19,6 +19,7 @@ dependencies = [
     "sentry-sdk>=2.0",
     # Pinned exactly: migration 0004 vendors this version's schema (BACKEND_DESIGN.md §7.7, §15).
     "procrastinate==3.10.0",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
@@ -34,6 +35,7 @@ dev = [
     "import-linter>=2.1",
     "pre-commit>=3.7",
     "check-jsonschema>=0.29",
+    "types-PyYAML>=6.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -62,7 +64,7 @@ ignore = [
 [tool.mypy]
 python_version = "3.11"
 strict = true
-packages = ["eca"]
+packages = ["eca", "eca_evals"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
@@ -84,10 +86,11 @@ filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
 # ---------------------------------------------------------------- import-linter
 # Module boundaries from BACKEND_DESIGN.md §5.3.
 [tool.importlinter]
-root_package = "eca"
+root_packages = ["eca", "eca_evals"]
 include_external_packages = true
 contract_types = [
     "eca_boundaries: eca_devtools.import_contracts.ModuleBoundaryContract",
+    "eca_restricted_imports: eca_devtools.import_contracts.RestrictedImportContract",
 ]
 
 [[tool.importlinter.contracts]]
@@ -100,6 +103,7 @@ domain_modules = [
 ]
 shared_modules = ["eca.platform"]
 composition_modules = ["eca.api", "eca.worker"]
+client_modules = ["eca_evals"]
 http_packages = ["fastapi", "starlette"]
 
 [[tool.importlinter.contracts]]
@@ -121,3 +125,16 @@ forbidden_modules = [
     "eca.meetings", "eca.people", "eca.work", "eca.projects", "eca.intelligence",
     "eca.retrieval", "eca.chat", "eca.attention", "eca.privacy", "eca.api", "eca.worker",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Only eca.intelligence imports the Gemini SDK"
+type = "eca_restricted_imports"
+package = "google.genai"
+allowed_importers = ["eca.intelligence"]
+source_packages = ["eca", "eca_evals"]
+
+[[tool.importlinter.contracts]]
+name = "The application never imports the evaluation harness"
+type = "forbidden"
+source_modules = ["eca"]
+forbidden_modules = ["eca_evals"]
