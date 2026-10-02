@@ -1,0 +1,36 @@
+# AI budget guardrails (AI_COST_MODEL.md §7, §7.2; degradation routes: AI_PIPELINE.md §14).
+# Loaded and validated at process start with models.yaml and pricing.yaml (BACKEND_DESIGN.md §5.5).
+# Spend = the user's ai_cost_rollups since 00:00 UTC. Changing this file is a major change
+# (AI_COST_MODEL.md §9).
+schema_version: 1
+
+per_user_daily_usd:
+  soft: "1.00"
+  hard: "2.50"
+
+# Per environment: the sum of every user's spend today. Only the worker enforces it, and only for
+# background roles. null disables the global budget.
+global_daily_usd: "25.00"
+global_alert_fraction: 0.70
+
+# AI-01 keeps running at the hard cap for senders the user rated at least this important (VIP)
+# and for the user's own outbound mail.
+vip_min_importance: 4
+
+# stop_at: the per-user level at which the role is refused (soft | hard | never).
+# background: also stops for everyone when the global budget is spent.
+# exempt_allowed: the caller may pass the VIP/outbound exemption (AI-01 only).
+# daily_calls: an extra cap on the role's calls per user per day.
+roles:
+  email_extract: {stop_at: hard, background: true, exempt_allowed: true}
+  adjudicate: {stop_at: hard, background: true, daily_calls: 20}
+  thread_summary: {stop_at: hard, background: true}
+  embed: {stop_at: hard, background: true}
+  plan_query: {stop_at: hard}
+  answer_lookup: {stop_at: hard}
+  answer_synthesis: {stop_at: soft}
+  reply_guidance: {stop_at: hard}
+  transcribe: {stop_at: hard, background: true}
+  meeting_extract: {stop_at: hard, background: true}
+  meeting_asks: {stop_at: soft}
+  judge: {stop_at: never}

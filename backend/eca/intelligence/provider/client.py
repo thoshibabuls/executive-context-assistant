@@ -1,6 +1,7 @@
 """``AIClient``: the single entry point for model calls (BACKEND_DESIGN.md §5.4-§5.5).
 
-One call = registry lookup (unknown and disabled roles fail first) → request built from the
+One call = registry lookup (unknown and disabled roles fail first) → budget guard (refused calls
+raise ``BudgetExceeded`` before anything else, AI_COST_MODEL.md §7.2) → request built from the
 role's settings → cassette replay or provider call → cost from the price table → one content-
 free ``ai_calls`` row (live and record modes only) → JSON parsed and validated against the
 output schema. Retry and fallback decisions belong to the caller (``attempts``).
@@ -19,6 +20,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ValidationError
 
+from eca.intelligence.budget import BudgetGuard
 from eca.intelligence.provider.cassette import CassetteKey, CassetteMode, CassetteStore, input_hash
 from eca.intelligence.provider.meter import CallRecord, Meter
 from eca.intelligence.provider.pricing import PriceTable
@@ -88,6 +90,7 @@ class AIClient:
         provider: Provider | None = None,
         cassettes: CassetteStore | None = None,
         meter: Meter | None = None,
+        budget: BudgetGuard | None = None,
         clock: Callable[[], datetime.datetime] = _utcnow,
     ) -> None:
         if mode in ("live", "record") and provider is None:
@@ -100,7 +103,12 @@ class AIClient:
         self._provider = provider
         self._cassettes = cassettes
         self._meter = meter
+        self._budget = budget
         self._clock = clock
+
+    @property
+    def budget(self) -> BudgetGuard | None:
+        return self._budget
 
     def _model(self, spec: RoleSpec, use_fallback: bool) -> str:
         if not use_fallback:
@@ -122,11 +130,15 @@ class AIClient:
         attempt: int = 1,
         use_fallback: bool = False,
         repair_note: str | None = None,
+        budget_exempt: bool = False,
     ) -> GenerateResult[OutputT]:
-        """One structured-output call for ``role``. Raises ``ProviderError`` or ``SchemaInvalid``."""
+        """One structured-output call for ``role``. Raises ``ProviderError``, ``SchemaInvalid`` or
+        ``BudgetExceeded`` (``budget_exempt``: the VIP/outbound exemption of AI-01, §7.2)."""
         spec = self.registry.role(role)
         if spec.is_embedding:
             raise AIError(f"AI role {role!r} is an embedding role")
+        if self._budget is not None:
+            await self._budget.check(role, user_id=user_id, exempt=budget_exempt)
         model = self._model(spec, use_fallback)
         parts: tuple[str | FileRef, ...] = tuple(contents)
         if repair_note is not None:
@@ -190,6 +202,8 @@ class AIClient:
         spec = self.registry.role(role)
         if not spec.is_embedding:
             raise AIError(f"AI role {role!r} is not an embedding role")
+        if self._budget is not None:
+            await self._budget.check(role, user_id=user_id)
         request = EmbedRequest(
             model=spec.model,
             texts=tuple(texts),

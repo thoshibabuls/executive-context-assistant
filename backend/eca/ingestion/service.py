@@ -473,6 +473,17 @@ async def set_stage_error(uow: UnitOfWork, source_item_id: UUID, *, error_code: 
     await uow.session.execute(update(t).where(t.c.id == source_item_id).values(last_error_code=error_code))
 
 
+async def defer_stage(
+    uow: UnitOfWork, source_item_id: UUID, *, until: datetime.datetime, error_code: str
+) -> None:
+    """Keep the stage and hold the reconciler off until ``until`` (budget deferral,
+    AI_COST_MODEL.md §7.2): the stage-SLA scan re-publishes ``SourceItemStageDue`` after it."""
+    t = source_items_table
+    await uow.session.execute(
+        update(t).where(t.c.id == source_item_id).values(next_attempt_at=until, last_error_code=error_code)
+    )
+
+
 async def items_in_stage(uow: UnitOfWork, stage: str) -> list[UUID]:
     t = source_items_table
     rows = await uow.session.execute(

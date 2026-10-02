@@ -50,7 +50,7 @@ def production_resources(settings: Settings) -> Callable[[UnitOfWorkFactory], Re
     revocation. The HTTP client lives as long as the worker process."""
 
     def build(uow_factory: UnitOfWorkFactory) -> Resources:
-        ai = eca.intelligence.build_ai_client(settings, uow_factory=uow_factory)
+        ai = eca.intelligence.build_ai_client(settings, uow_factory=uow_factory, global_budget=True)
         values: list[object] = [
             eca.ingestion.build_connector_registry(settings, uow_factory),
             SystemClock(),

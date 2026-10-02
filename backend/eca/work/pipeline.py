@@ -5,6 +5,10 @@ the input; the model is called outside any transaction; transaction 2 stores the
 the source stage and publishes ``ExtractionCompleted``. A succeeded row is reused without an AI
 call (RT-02b at most one extra call after a crash between the call and the store).
 ``apply`` is a consumption handler: one transaction under the per-user merge lock.
+
+At the hard budget cap AI-01 runs only for the user's outbound mail and VIP senders
+(``importance_user`` at or above the configured threshold); other messages are deferred until the
+spend window resets, without counting an attempt (AI_COST_MODEL.md §7.2).
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from eca.ingestion import (
     SOURCE_ITEM_STAGE_DUE,
     SourceItemDeleted,
     SourceItemStageDue,
+    defer_stage,
     get_source_item,
     set_stage,
     set_stage_error,
@@ -32,6 +37,7 @@ from eca.intelligence import (
     ExtractionCompleted,
     Participant,
     claim,
+    default_budget_config,
     ensure_completed_event,
     get_extraction,
     latest_pending_for_source,
@@ -41,7 +47,7 @@ from eca.intelligence import (
     store_failure,
     store_success,
 )
-from eca.people import get_self_person
+from eca.people import get_self_person, importance_of
 from eca.platform.clock import Clock
 from eca.platform.events import HandlerContext, handles
 from eca.platform.uow import UnitOfWorkFactory
@@ -85,16 +91,27 @@ async def _build_input(uow, source_item_id: UUID) -> EmailInput:  # type: ignore
     )
 
 
+async def _budget_exempt(uow, source_item_id: UUID) -> bool:  # type: ignore[no-untyped-def]
+    """Outbound mail by the user, or a sender rated VIP (AI_COST_MODEL.md §7.2)."""
+    view = await get_message_view(uow, source_item_id)
+    if view.direction == "outbound":
+        return True
+    rated = (await importance_of(uow, [view.sender.id])).get(view.sender.id) or {}
+    return int(rated.get("importance_user") or 0) >= default_budget_config().vip_min_importance
+
+
 async def extract_source_item(
     uow_factory: UnitOfWorkFactory, client: AIClient, *, user_id: UUID, source_item_id: UUID
 ) -> str:
-    """Returns the outcome: ``skipped`` | ``reused`` | ``succeeded`` | ``failed_permanent``."""
+    """Returns the outcome: ``skipped`` | ``reused`` | ``succeeded`` | ``deferred`` |
+    ``failed_permanent``."""
     async with uow_factory(user_id=user_id) as uow:
         await set_code_path(uow, "extract")
         item = await get_source_item(uow, source_item_id, for_update=True)
         if item.stage != "extract_pending":
             return "skipped"
         inp = await _build_input(uow, source_item_id)
+        exempt = await _budget_exempt(uow, source_item_id)
         claimed: Claim = await claim(uow, inp)
         if claimed.status == "succeeded":
             await ensure_completed_event(uow, claimed.extraction_id, source_item_id, "email_extract")
@@ -109,9 +126,18 @@ async def extract_source_item(
                 error_code="extraction_failed_permanent",
             )
             return "failed_permanent"
-    outcome = await run_email_extract(client, inp, attempts_used=claimed.attempts, user_id=user_id)
+    outcome = await run_email_extract(
+        client, inp, attempts_used=claimed.attempts, user_id=user_id, budget_exempt=exempt
+    )
     async with uow_factory(user_id=user_id) as uow:
         await set_code_path(uow, "extract")
+        if outcome.deferred_for_s is not None:
+            until = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=outcome.deferred_for_s)
+            await defer_stage(uow, source_item_id, until=until, error_code="budget_deferred")
+            log.info(
+                "extraction_deferred", source_item_id=str(source_item_id), seconds=outcome.deferred_for_s
+            )
+            return "deferred"
         if outcome.ok:
             await store_success(uow, claimed, outcome)
             await set_stage(uow, source_item_id, expected=("extract_pending",), new="extracted")

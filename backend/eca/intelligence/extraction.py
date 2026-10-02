@@ -29,6 +29,7 @@ from eca.intelligence.output_schemas.adjudicate import SCHEMA_VERSION as ADJ_SCH
 from eca.intelligence.output_schemas.email_extract import SCHEMA_VERSION as EMAIL_SCHEMA
 from eca.intelligence.provider.client import AIClient
 from eca.intelligence.provider.types import ProviderError, RoleDisabled, SchemaInvalid
+from eca.platform.errors import BudgetExceeded
 from eca.platform.events import NewEvent
 from eca.platform.ids import uuid7
 from eca.platform.outbox import publish
@@ -104,6 +105,8 @@ class RunOutcome:
     error_code: str | None = None
     retryable: bool = False
     call_ids: list[UUID] = field(default_factory=list)
+    # Budget guard refusal (AI_COST_MODEL.md §7.2): defer until the window resets; not an attempt.
+    deferred_for_s: int | None = None
 
 
 def prompt_text(version: str) -> str:
@@ -206,9 +209,17 @@ async def claim(
 
 
 async def run_email_extract(
-    client: AIClient, inp: EmailInput, *, attempts_used: int, user_id: UUID | None
+    client: AIClient,
+    inp: EmailInput,
+    *,
+    attempts_used: int,
+    user_id: UUID | None,
+    budget_exempt: bool = False,
 ) -> RunOutcome:
-    """AI-01 with the attempt policy (§7): fallback from attempt 3, one repair, cap 4. No DB."""
+    """AI-01 with the attempt policy (§7): fallback from attempt 3, one repair, cap 4. No DB.
+
+    ``budget_exempt``: VIP sender or the user's outbound mail keep AI-01 at the hard cap (§7.2).
+    A budget refusal is returned as ``deferred_for_s`` and does not count as a call (§7)."""
     system, content = render_email_prompt(inp)
     outcome = RunOutcome(ok=False)
     repair_note: str | None = None
@@ -229,7 +240,13 @@ async def run_email_extract(
                 attempt=attempt,
                 use_fallback=attempt >= 3,
                 repair_note=repair_note,
+                budget_exempt=budget_exempt,
             )
+        except BudgetExceeded as exc:
+            outcome.calls -= 1
+            outcome.error_code = "budget_exceeded"
+            outcome.deferred_for_s = exc.retry_after_s or 3600
+            return outcome
         except SchemaInvalid as exc:
             if repaired:
                 outcome.error_code = "schema_invalid"
@@ -271,6 +288,8 @@ async def run_adjudication(
         )
     except RoleDisabled:
         return RunOutcome(ok=False, error_code="role_disabled")
+    except BudgetExceeded:  # keep the T1 result (AI_COST_MODEL.md §7.2)
+        return RunOutcome(ok=False, error_code="budget_exceeded")
     except (SchemaInvalid, ProviderError) as exc:
         return RunOutcome(ok=False, error_code=type(exc).__name__, calls=1)
     return RunOutcome(ok=True, output=result.output.model_dump(mode="json"), model=result.model, calls=1)

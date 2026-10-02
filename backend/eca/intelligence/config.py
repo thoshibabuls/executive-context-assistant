@@ -1,8 +1,8 @@
 """Loading the AI configuration and building the client (BACKEND_DESIGN.md §5.5).
 
-``config/models.yaml`` and ``config/pricing.yaml`` (repository root, or ``API_AI_CONFIG_DIR``)
-are loaded once at process start and validated: every model the registry can call must have a
-price today. A failure is a startup error (``ConfigError``).
+``config/models.yaml``, ``config/pricing.yaml`` and ``config/budgets.yaml`` (repository root, or
+``API_AI_CONFIG_DIR``) are loaded once at process start and validated: every model the registry
+can call must have a price today. A failure is a startup error (``ConfigError``).
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from pathlib import Path
 
 from pydantic import SecretStr
 
+from eca.intelligence.budget import BudgetConfig, BudgetGuard
 from eca.intelligence.provider.cassette import CassetteMode, CassetteStore
 from eca.intelligence.provider.client import AIClient, Provider
 from eca.intelligence.provider.meter import Meter
@@ -30,6 +31,7 @@ DEFAULT_TIMEOUT_S = 60.0
 class AIConfig:
     registry: RoleRegistry
     prices: PriceTable
+    budgets: BudgetConfig
 
 
 def load_ai_config(config_dir: Path | None = None, *, today: datetime.date | None = None) -> AIConfig:
@@ -37,7 +39,8 @@ def load_ai_config(config_dir: Path | None = None, *, today: datetime.date | Non
     registry = RoleRegistry.from_file(directory / "models.yaml")
     prices = PriceTable.from_file(directory / "pricing.yaml")
     prices.check_covers(registry.model_ids(), today or datetime.datetime.now(datetime.UTC).date())
-    return AIConfig(registry=registry, prices=prices)
+    budgets = BudgetConfig.from_file(directory / "budgets.yaml")
+    return AIConfig(registry=registry, prices=prices, budgets=budgets)
 
 
 def build_ai_client(
@@ -46,11 +49,14 @@ def build_ai_client(
     uow_factory: UnitOfWorkFactory | None,
     config: AIConfig | None = None,
     provider: Provider | None = None,
+    global_budget: bool = False,
 ) -> AIClient:
     """The process's ``AIClient`` from settings (mode, key, cassette directory, timeout).
 
     ``record`` mode is refused in production; ``live`` and ``record`` need a key (or an injected
-    provider). Replay mode never creates a provider, so it never reaches the network.
+    provider). Replay mode never creates a provider, so it never reaches the network. With a
+    database the client gets the budget guard (AI_COST_MODEL.md §7.2); ``global_budget`` is set by
+    the worker, the only process that can read every user's spend.
     """
     mode: CassetteMode = settings.api_ai_mode
     if mode == "record" and settings.is_production:
@@ -68,6 +74,11 @@ def build_ai_client(
         provider=provider if mode != "replay" else None,
         cassettes=cassettes,
         meter=Meter(uow_factory) if uow_factory is not None else None,
+        budget=(
+            BudgetGuard(uow_factory, cfg.budgets, global_scope=global_budget)
+            if uow_factory is not None
+            else None
+        ),
     )
 
 

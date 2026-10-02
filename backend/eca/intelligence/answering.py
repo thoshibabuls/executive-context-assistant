@@ -23,6 +23,7 @@ from eca.intelligence.output_schemas.plan_query import PlanQuery
 from eca.intelligence.provider.attempts import Degraded, run_interactive
 from eca.intelligence.provider.client import AIClient, GenerateResult
 from eca.intelligence.provider.types import AIError
+from eca.platform.errors import BudgetExceeded
 
 PLAN_PROMPT_VERSION = "plan_query/v1"
 LOOKUP_PROMPT_VERSION = "answer_lookup/v1"
@@ -78,6 +79,8 @@ async def _interactive(
         return InteractiveCall(None, role, None, prompt_version, tuple(calls), exc.kind.value)
     except AIError as exc:  # role disabled, unknown role, cassette miss, no fallback
         return InteractiveCall(None, role, None, prompt_version, tuple(calls), type(exc).__name__)
+    except BudgetExceeded:  # the guard refused the call (AI_COST_MODEL.md §7.2)
+        return InteractiveCall(None, role, None, prompt_version, tuple(calls), "budget_exceeded")
     return InteractiveCall(result.output, role, result.model, prompt_version, tuple(calls))
 
 

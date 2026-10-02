@@ -15,6 +15,7 @@ from uuid import UUID
 
 from eca.intelligence.provider.client import AIClient
 from eca.intelligence.provider.types import AIError, ProviderError, SchemaInvalid
+from eca.platform.errors import BudgetExceeded
 
 EMBED_ROLE = "embed"
 EMBED_INPUT_VERSION = "embed/v1"
@@ -76,6 +77,8 @@ async def embed_documents(
             )
         except (ProviderError, SchemaInvalid) as exc:
             raise EmbeddingUnavailable(type(exc).__name__) from exc
+        except BudgetExceeded as exc:  # hard cap or global budget: FTS-only (AI_COST_MODEL.md §7.2)
+            raise EmbeddingUnavailable("budget_exceeded") from exc
         if len(result.vectors) != len(batch):
             raise EmbeddingUnavailable("vector_count_mismatch")
         vectors.extend(normalize(v) for v in result.vectors)
@@ -93,6 +96,8 @@ async def embed_query(client: AIClient, question: str, *, user_id: UUID | None) 
             return await embed_documents(client, [query_input(question)], user_id=user_id, attempt=attempt)
         except EmbeddingUnavailable as exc:
             last = exc
+            if exc.error_type == "budget_exceeded":
+                break
     assert last is not None
     raise last
 
