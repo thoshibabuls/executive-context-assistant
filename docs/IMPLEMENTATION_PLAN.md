@@ -8,13 +8,13 @@
 
 ## 0. Implementation status
 
-Last updated 2026-10-02 (slice 0.3 implementation; local results only, CI has not run on it).
+Last updated 2026-10-02 (slice 0.3 locally verified; CI has not run on it).
 
 | Slice | Code | Verification |
 |---|---|---|
 | 0.1 Repository hygiene | Implemented (commit `5b71b09`) | `.env` git-ignored and untracked (unit tests pass, locally and in CI). gitleaks pre-commit hook over all files: passed locally. **Git-history scan (CI `secrets` job): not performed.** The job fails in its install step before scanning (§0.1). Gemini key rotation: not verifiable from the repository (owner action) |
 | 0.2 Backend skeleton | Implemented (commit `5b71b09`) | **RT-15 passes** on PostgreSQL in CI. **"CI green" is not met**: the lint and test jobs pass, but the overall run is red because of the `secrets` job (§0.1) |
-| 0.3 Reliability core | Implemented (commit "Slice 0.3: reliable event infrastructure") | **Not yet "locally verified"**: exit criteria 1, 2 and 4 met locally (§0.3); criterion 3 (100 consecutive RT-01 + RT-05 runs) in progress; CI not run on this commit |
+| 0.3 Reliability core | Implemented (commit `c5d7c0e`, "Slice 0.3: reliable event infrastructure") | **Locally verified**: exit criteria 1–4 met locally (§0.3), including 100 consecutive RT-01 + RT-05 runs. **Not "complete"**: CI has not run on this commit, and the `secrets` job bug (§0.1) keeps any run red |
 
 ### 0.1 CI evidence (GitHub Actions)
 
@@ -37,11 +37,11 @@ Environment: Python 3.11; PostgreSQL 17.11 with pgvector 0.8.7 in Docker (`pgvec
 |---|---|
 | 1. ruff, ruff format, mypy (strict, 43 files), lint-imports (`eca.worker` as composition module, 3 contracts) | Pass |
 | 2. Full pytest with zero skipped | **165 passed, 0 skipped** (96 PostgreSQL tests, 69 without a database) |
-| 3. RT-01 (infrastructure level, 9 tests) + RT-05 (5 tests), 100 consecutive runs, no reruns | **In progress, not met yet**: 24 of 100 consecutive runs passed (14 passed each, about 46 s per run), no failure, when this was committed. Command: `pytest -q -x tests/reliability/test_rt01_infrastructure.py tests/reliability/test_rt05_duplicate_dispatch.py`, repeated. An earlier loop stopped at run 1 on a test defect: case (d) counted the recovery of a periodic `eca.reconcile` job that was running at the crash as a second handler recovery. The test now counts handler jobs only, and the loop was restarted from zero |
+| 3. RT-01 (infrastructure level, 9 tests) + RT-05 (5 tests), 100 consecutive runs, no reruns | **Met: 100 of 100 consecutive runs passed** (14 passed in every run, no failure, no rerun; run time mean 47.0 s, min 43.7 s, max 54.3 s; 78 minutes in total; loop stops at the first failure). Command: `pytest -q -x tests/reliability/test_rt01_infrastructure.py tests/reliability/test_rt05_duplicate_dispatch.py`, repeated. An earlier loop stopped at run 1 on a test defect: case (d) counted the recovery of a periodic `eca.reconcile` job that was running at the crash as a second handler recovery. The test now counts handler jobs only, and the loop was restarted from zero |
 | 4. No domain schema; no FK on `outbox.user_id`; migrations create no roles | Met (tested: `test_migrations_0003.py`, `test_privileges.py`) |
-| 5. This section updated with measured results | This section; to be completed with the final loop result |
+| 5. This section updated with measured results | Done |
 
-CI: not run on this commit. Pushes to a non-`main` branch do not trigger the workflow, and the `secrets` job bug (§0.1) still keeps any run red. Slice 0.3 becomes "locally verified" when criterion 3 completes, and "complete" only with a green CI run.
+CI: not run on this commit. Pushes to a non-`main` branch do not trigger the workflow, and the `secrets` job bug (§0.1) still keeps any run red. Slice 0.3 is "locally verified"; it becomes "complete" only with a green CI run.
 
 ### 0.2 Local environments (history; CI above is the reference evidence)
 
