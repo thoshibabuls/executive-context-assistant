@@ -138,12 +138,29 @@ async def purge_sources(uow: UnitOfWork, source_ids: Sequence[UUID], extraction_
         await uow.session.execute(update(ce).where(ce.c.extraction_id.in_(exts)).values(extraction_id=None))
         await uow.session.execute(update(wi).where(wi.c.extraction_id.in_(exts)).values(extraction_id=None))
         await uow.session.execute(update(dc).where(dc.c.extraction_id.in_(exts)).values(extraction_id=None))
+    await delete_unreferenced_evidence(uow, srcs)
+
+
+async def delete_unreferenced_evidence(uow: UnitOfWork, source_ids: Sequence[UUID]) -> None:
+    """Evidence of these sources that no item link, event or reported status points at."""
+    ev, ie, ce, wi = evidence_table, item_evidence_table, context_events_table, work_items_table
     referenced = union(
         select(ie.c.evidence_id),
         select(ce.c.evidence_id).where(ce.c.evidence_id.is_not(None)),
         select(wi.c.reported_status_evidence_id).where(wi.c.reported_status_evidence_id.is_not(None)),
     )
-    await uow.session.execute(delete(ev).where(ev.c.source_item_id.in_(srcs), ev.c.id.not_in(referenced)))
+    await uow.session.execute(
+        delete(ev).where(ev.c.source_item_id.in_(list(source_ids)), ev.c.id.not_in(referenced))
+    )
+
+
+async def detach_conversations(uow: UnitOfWork, conversation_ids: Sequence[UUID]) -> None:
+    """Kept decisions lose their link to conversations that a source purge deletes."""
+    dc = decisions_table
+    if conversation_ids:
+        await uow.session.execute(
+            update(dc).where(dc.c.conversation_id.in_(list(conversation_ids))).values(conversation_id=None)
+        )
 
 
 async def purge_user(uow: UnitOfWork) -> None:

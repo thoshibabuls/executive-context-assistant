@@ -68,10 +68,17 @@ from eca.intelligence.provider.types import (
     UnknownRole,
     Usage,
 )
-from eca.intelligence.purge import delete_extractions, extraction_ids_for_sources, purge_old_calls, purge_user
+from eca.intelligence.purge import (
+    AI_CALLS_RETENTION_DAYS,
+    delete_extractions,
+    extraction_ids_for_sources,
+    purge_old_calls,
+    purge_user,
+)
 from eca.intelligence.tasks import COST_ROLLUP_TASK, periodic_tasks
 
 __all__ = [
+    "AI_CALLS_RETENTION_DAYS",
     "ATTEMPT_CAP",
     "COST_ROLLUP_TASK",
     "EMAIL_PROMPT_VERSION",

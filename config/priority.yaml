@@ -1,0 +1,35 @@
+# Priority v1 weights (TECHNICAL_DESIGN.md §12.6). Code computes the score; the model supplies
+# categorical features only. These are INITIAL hand-set weights, not fitted: fitting on labelled
+# pairs (AI_EVALUATION.md §4.5) is pending, and no evaluation result is claimed for them.
+version: "priority-v1-initial"
+weights:
+  deadline_urgency: 0.24
+  sender_importance: 0.16
+  org_importance: 0.06
+  project_importance: 0.04
+  commitment_weight: 0.18
+  explicit_request: 0.10
+  business_impact: 0.10
+  thread_activity: 0.06
+  meeting_proximity: 0.06
+deadline_urgency:        # by time to due (or overdue)
+  overdue: 1.0
+  within_24h: 0.9
+  within_72h: 0.6
+  within_7d: 0.3
+commitment_weight:       # by direction; waiting_for counts only when overdue
+  my_commitment: 1.0
+  my_task: 1.0
+  waiting_for_overdue: 0.7
+  delegated: 0.5
+business_impact:         # AI-01 triage label
+  low: 0.2
+  medium: 0.5
+  high: 1.0
+# Bulk or unknown senders: capped without user confirmation (prompt-injection defence, §17.6).
+unconfirmed_unknown_cap: 60
+# priority_override: 1 pins high, -1 pins low.
+override_scores:
+  "1": 95
+  "-1": 5
+reasons_top_n: 3

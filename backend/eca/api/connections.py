@@ -21,13 +21,14 @@ from eca.connections import (
     start_connect,
 )
 from eca.identity import JwksCache, get_profile
-from eca.ingestion import MAIL_RESOURCE, SYNC_REQUESTED, SyncRequested
+from eca.ingestion import CALENDAR_RESOURCE, MAIL_RESOURCE, SYNC_REQUESTED, SyncRequested
 from eca.platform.audit import record_audit
 from eca.platform.config import Settings
 from eca.platform.errors import ValidationFailed
 from eca.platform.events import NewEvent
 from eca.platform.outbox import publish
 from eca.platform.uow import UnitOfWorkFactory
+from eca.privacy import request_source_purge
 
 router = APIRouter(prefix="/api/v1/connections")
 
@@ -117,16 +118,17 @@ async def callback(
             target_id=view.id,
             metadata={"capabilities": list(view.capabilities)},
         )
-        if "mail" in view.capabilities:
-            await publish(
-                uow,
-                NewEvent(
-                    SYNC_REQUESTED,
-                    "connection",
-                    view.id,
-                    SyncRequested(connection_id=view.id, resource=MAIL_RESOURCE, trigger="manual"),
-                ),
-            )
+        for capability, resource in (("mail", MAIL_RESOURCE), ("calendar", CALENDAR_RESOURCE)):
+            if capability in view.capabilities:
+                await publish(
+                    uow,
+                    NewEvent(
+                        SYNC_REQUESTED,
+                        "connection",
+                        view.id,
+                        SyncRequested(connection_id=view.id, resource=resource, trigger="manual"),
+                    ),
+                )
     return RedirectResponse(f"{settings.web_base_url}/settings/connections", status_code=302)
 
 
@@ -137,15 +139,16 @@ async def sync(
     factory: Annotated[UnitOfWorkFactory, Depends(uow_factory)],
 ) -> dict[str, str]:
     async with factory(user_id=user.user_id) as uow:
-        await publish(
-            uow,
-            NewEvent(
-                SYNC_REQUESTED,
-                "connection",
-                connection_id,
-                SyncRequested(connection_id=connection_id, resource=MAIL_RESOURCE, trigger="manual"),
-            ),
-        )
+        for resource in (MAIL_RESOURCE, CALENDAR_RESOURCE):
+            await publish(
+                uow,
+                NewEvent(
+                    SYNC_REQUESTED,
+                    "connection",
+                    connection_id,
+                    SyncRequested(connection_id=connection_id, resource=resource, trigger="manual"),
+                ),
+            )
     return {"status": "queued"}
 
 
@@ -167,4 +170,5 @@ async def remove(
             target_id=connection_id,
             metadata={"purge_requested": purge},
         )
-    return {"status": "revoked", "purge": purge, "purge_note": "source purge job arrives in slice 1.9"}
+        job_id = await request_source_purge(uow, connection_id) if purge else None
+    return {"status": "revoked", "purge": purge, "deletion_job_id": str(job_id) if job_id else None}

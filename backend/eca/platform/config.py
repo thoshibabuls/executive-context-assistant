@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     token_kek: SecretStr | None = None
     token_kek_version: int = 1
 
+    # Pagination cursors (slice 1.7, §16.4): HMAC key. Unset → a random per-process key (cursors
+    # then stop working across restarts and instances; set it in deployed environments).
+    cursor_signing_key: SecretStr | None = None
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.api_cors_origins.split(",") if o.strip()]

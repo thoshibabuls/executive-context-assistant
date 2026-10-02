@@ -87,3 +87,17 @@ async def purge_user(uow: UnitOfWork) -> None:
     await uow.session.execute(delete(message_participants_table))
     await uow.session.execute(delete(messages_table))
     await uow.session.execute(delete(conversations_table))
+
+
+async def conversation_ids_for_sources(uow: UnitOfWork, source_item_ids: Sequence[UUID]) -> list[UUID]:
+    m = messages_table
+    rows = await uow.session.execute(
+        select(m.c.conversation_id).where(m.c.source_item_id.in_(list(source_item_ids))).distinct()
+    )
+    return sorted(r.conversation_id for r in rows)
+
+
+async def detach_connection(uow: UnitOfWork, connection_id: UUID) -> None:
+    """Conversations left after a source purge no longer point at the deleted connection."""
+    c = conversations_table
+    await uow.session.execute(update(c).where(c.c.connection_id == connection_id).values(connection_id=None))

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, MetaData, Table, Text
+from sqlalchemy import REAL, Boolean, Column, DateTime, Integer, MetaData, SmallInteger, Table, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
@@ -25,6 +25,10 @@ conversations_table = Table(
     Column("needs_reply", Boolean, nullable=False),
     Column("needs_reply_source", Text),
     Column("handled_by_user_at", DateTime(timezone=True)),
+    Column("summary", Text),
+    Column("priority_score", REAL),
+    Column("priority_reasons", JSONB),
+    Column("priority_override", SmallInteger),
     Column("version", Integer, nullable=False),
 )
 

@@ -2,7 +2,8 @@
 
 The key row is inserted in the request's own transaction: a concurrent request with the same key
 waits on the primary key until the first commits, then replays its stored response. The same key
-with a different request body is a conflict. Keys expire after 24 hours.
+with a different request body is ``422`` (§16.3); one still in progress is ``409``.
+Keys expire after 24 hours.
 """
 
 from __future__ import annotations
@@ -73,7 +74,9 @@ async def claim_key(
         )
     ).one()
     if bytes(row.request_hash) != digest:
-        raise Conflict("Idempotency-Key was used with a different request", details={"reason": "key_reused"})
+        raise ValidationFailed(
+            "Idempotency-Key was used with a different request", details={"reason": "key_reused"}
+        )
     if row.status_code is None:
         raise Conflict(
             "a request with this Idempotency-Key is in progress", details={"reason": "in_progress"}

@@ -90,6 +90,9 @@ class WorkItemView:
     version: int
     merged_into_id: UUID | None
     evidence_source_ids: tuple[UUID, ...] = ()
+    priority_score: float | None = None
+    priority_reasons: tuple[dict[str, Any], ...] = ()
+    has_source_gap: bool = False
 
 
 def model_dedupe_key(extraction_id: UUID, index: int, event_type: str) -> bytes:
@@ -542,6 +545,9 @@ def _view(row: Any, sources: tuple[UUID, ...] = ()) -> WorkItemView:
         version=row.version,
         merged_into_id=row.merged_into_id,
         evidence_source_ids=sources,
+        priority_score=getattr(row, "priority_score", None),
+        priority_reasons=tuple(getattr(row, "priority_reasons", None) or ()),
+        has_source_gap=bool(getattr(row, "has_source_gap", False)),
     )
 
 
