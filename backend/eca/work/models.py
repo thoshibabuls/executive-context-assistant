@@ -1,4 +1,4 @@
-"""Tables owned by ``work`` (BACKEND_DESIGN.md §5.1). Mirrors migration 0008."""
+"""Tables owned by ``work`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0008 and 0012."""
 
 from __future__ import annotations
 
@@ -135,4 +135,23 @@ context_events_table = Table(
     Column("dedupe_key", BYTEA, nullable=False),
     Column("occurred_at", _TS, nullable=False),
     Column("recorded_at", _TS),
+)
+
+entity_links_table = Table(
+    "entity_links",
+    metadata,
+    Column("id", _U, primary_key=True),
+    Column("user_id", _U, nullable=False),
+    Column("from_type", Text, nullable=False),
+    Column("from_id", _U, nullable=False),
+    Column("to_type", Text, nullable=False),
+    Column("to_id", _U, nullable=False),
+    Column("relation", Text, nullable=False),
+    Column("confidence", REAL, nullable=False),
+    Column("method", Text, nullable=False),
+    Column("origin", Text, nullable=False),
+    Column("verification_status", Text, nullable=False),
+    Column("scores", JSONB, nullable=False),
+    Column("created_at", _TS),
+    Column("updated_at", _TS),
 )

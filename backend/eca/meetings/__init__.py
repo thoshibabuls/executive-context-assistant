@@ -8,9 +8,13 @@ meeting extraction arrive in Phase 4. Other modules import only from this packag
 from eca.meetings import tasks as _tasks  # registers handlers
 from eca.meetings.events import MEETING_CHANGED, MeetingChanged
 from eca.meetings.service import (
+    MeetingDetail,
     MeetingView,
     cancel_from_deleted_source,
+    get_meeting_details,
+    meeting_details_between,
     meetings_between,
+    meetings_by_sources,
     purge_sources,
     purge_user,
     upcoming_attendee_ids,
@@ -22,9 +26,13 @@ del _tasks
 __all__ = [
     "MEETING_CHANGED",
     "MeetingChanged",
+    "MeetingDetail",
     "MeetingView",
     "cancel_from_deleted_source",
+    "get_meeting_details",
+    "meeting_details_between",
     "meetings_between",
+    "meetings_by_sources",
     "purge_sources",
     "purge_user",
     "upcoming_attendee_ids",

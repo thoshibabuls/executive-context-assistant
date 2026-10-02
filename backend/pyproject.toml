@@ -186,3 +186,25 @@ name = "identity and connections are leaf domain modules"
 type = "forbidden"
 source_modules = ["eca.identity", "eca.connections"]
 forbidden_modules = ["eca.ingestion", "eca.communication", "eca.work", "eca.people", "eca.intelligence"]
+
+# ---------------------------------------------------------------- Phase 2 dependency rules (§5.2)
+[[tool.importlinter.contracts]]
+name = "Modules below the read side never import retrieval, projects or chat"
+type = "forbidden"
+source_modules = [
+    "eca.work", "eca.people", "eca.communication", "eca.meetings", "eca.ingestion", "eca.identity",
+    "eca.connections", "eca.attention",
+]
+forbidden_modules = ["eca.retrieval", "eca.projects", "eca.chat"]
+
+[[tool.importlinter.contracts]]
+name = "retrieval never imports chat"
+type = "forbidden"
+source_modules = ["eca.retrieval"]
+forbidden_modules = ["eca.chat"]
+
+[[tool.importlinter.contracts]]
+name = "projects never imports retrieval or chat"
+type = "forbidden"
+source_modules = ["eca.projects"]
+forbidden_modules = ["eca.retrieval", "eca.chat"]

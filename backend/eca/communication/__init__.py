@@ -16,6 +16,7 @@ from eca.communication.purge import (
     purge_bodies,
     purge_sources,
     purge_user,
+    sources_without_body,
 )
 from eca.communication.queries import (
     ConversationPage,
@@ -84,5 +85,6 @@ __all__ = [
     "set_conversation_priority",
     "set_priority_override",
     "set_triage_projection",
+    "sources_without_body",
     "split_forwarded",
 ]

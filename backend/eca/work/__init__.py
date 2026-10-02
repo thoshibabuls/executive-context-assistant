@@ -1,8 +1,8 @@
 """Context core: work items, decisions, evidence, context events, fold.
 
 Owns (single writer, BACKEND_DESIGN.md §5.1): work_items, work_item_owners, decisions,
-evidence, item_evidence, context_events, entity_links. Orchestrates email extraction and apply
-(§5.6). Other modules import only from this package root.
+evidence, item_evidence, context_events, entity_links (Phase 2: thread continuation links).
+Orchestrates email extraction and apply (§5.6). Other modules import only from this package root.
 """
 
 from eca.work import pipeline as _pipeline  # registers the extract and apply handlers
@@ -23,6 +23,7 @@ from eca.work.confidence import Confidence, band, compute
 from eca.work.dates import DueResolution, compatible_due, resolve_due
 from eca.work.events import ADJUDICATION_NEEDED, WORK_ITEM_CHANGED, AdjudicationNeeded, WorkItemChanged
 from eca.work.fold import FoldEvent, FoldResult, fold
+from eca.work.links import EntityLink, delete_links, link_entities, links_of
 from eca.work.mapping import Mapped, authority, map_statement
 from eca.work.pipeline import (
     APPLY_HANDLER,
@@ -85,6 +86,7 @@ __all__ = [
     "Confidence",
     "DecisionView",
     "DueResolution",
+    "EntityLink",
     "EvidenceView",
     "ExtractionRetry",
     "FoldEvent",
@@ -109,6 +111,7 @@ __all__ = [
     "create_item_for_user",
     "create_user_item",
     "decision_command",
+    "delete_links",
     "delete_unreferenced_evidence",
     "delete_user_item",
     "detach_conversations",
@@ -123,6 +126,8 @@ __all__ = [
     "get_item",
     "item_detail",
     "lifecycle_command",
+    "link_entities",
+    "links_of",
     "list_decisions_page",
     "list_items",
     "list_items_page",

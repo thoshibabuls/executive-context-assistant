@@ -17,7 +17,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from eca.people.identity_rules import (
@@ -60,6 +60,7 @@ class MentionIn:
     method: str
     occurred_at: datetime.datetime
     evidence_id: UUID | None = None
+    chunk_id: UUID | None = None
 
 
 def _ref(row: object) -> PersonRef:
@@ -314,6 +315,7 @@ async def record_mentions(uow: UnitOfWork, mentions: Sequence[MentionIn]) -> Non
                 user_id=uow.user_id,
                 source_item_id=m.source_item_id,
                 evidence_id=m.evidence_id,
+                chunk_id=m.chunk_id,
                 entity_type=m.entity_type,
                 entity_id=m.entity_id,
                 surface_text=m.surface_text,
@@ -361,3 +363,96 @@ async def merged_ids(uow: UnitOfWork, person_id: UUID) -> list[UUID]:
         )
     )
     return sorted(r.id for r in rows)
+
+
+@dataclass(frozen=True)
+class AliasEntry:
+    person_id: UUID
+    alias: str  # normalized (lower case, single spaces)
+
+
+ALIAS_MIN_WORDS = 2
+ALIAS_MIN_CHARS = 5
+
+
+async def alias_catalog(uow: UnitOfWork) -> list[AliasEntry]:
+    """Name aliases usable for the alias scan (CONTEXT_ARCHITECTURE.md §12.7): at least two words
+    and five characters, of persons that are not the user and not merged into another person."""
+    ids, p = person_identifiers_table, persons_table
+    rows = await uow.session.execute(
+        select(ids.c.person_id, ids.c.value_normalized)
+        .join(p, p.c.id == ids.c.person_id)
+        .where(
+            ids.c.user_id == uow.user_id,
+            ids.c.kind == "name_alias",
+            ~p.c.is_self,
+            p.c.merged_into_id.is_(None),
+            p.c.deleted_at.is_(None),
+            func.length(ids.c.value_normalized) >= ALIAS_MIN_CHARS,
+        )
+        .order_by(ids.c.value_normalized, ids.c.person_id)
+    )
+    return [
+        AliasEntry(r.person_id, r.value_normalized)
+        for r in rows
+        if len(r.value_normalized.split(" ")) >= ALIAS_MIN_WORDS
+    ]
+
+
+async def replace_alias_mentions(
+    uow: UnitOfWork, source_item_id: UUID, mentions: Sequence[MentionIn]
+) -> None:
+    """Re-index of one source: its ``alias_match`` mentions are replaced (other methods are kept)."""
+    em = entity_mentions_table
+    await uow.session.execute(
+        delete(em).where(
+            em.c.user_id == uow.user_id, em.c.source_item_id == source_item_id, em.c.method == "alias_match"
+        )
+    )
+    for m in mentions:
+        if m.method != "alias_match" or m.source_item_id != source_item_id:
+            raise ValidationFailed("replace_alias_mentions takes alias_match mentions of one source")
+        await uow.session.execute(
+            insert(entity_mentions_table)
+            .values(
+                id=uuid7(),
+                user_id=uow.user_id,
+                source_item_id=m.source_item_id,
+                chunk_id=m.chunk_id,
+                entity_type=m.entity_type,
+                entity_id=m.entity_id,
+                surface_text=m.surface_text,
+                confidence=m.confidence,
+                method=m.method,
+                occurred_at=m.occurred_at,
+            )
+            .on_conflict_do_nothing()
+        )
+
+
+@dataclass(frozen=True)
+class MentionCount:
+    source_item_id: UUID
+    occurred_at: datetime.datetime
+
+
+async def mentions_of(
+    uow: UnitOfWork, entity_type: str, entity_ids: Sequence[UUID], *, since: datetime.datetime
+) -> list[MentionCount]:
+    """Sources mentioning the entities since ``since``, newest first (person and project context)."""
+    ids = list(entity_ids)
+    if not ids:
+        return []
+    em = entity_mentions_table
+    rows = await uow.session.execute(
+        select(em.c.source_item_id, func.max(em.c.occurred_at).label("at"))
+        .where(
+            em.c.user_id == uow.user_id,
+            em.c.entity_type == entity_type,
+            em.c.entity_id.in_(ids),
+            em.c.occurred_at >= since,
+        )
+        .group_by(em.c.source_item_id)
+        .order_by(func.max(em.c.occurred_at).desc(), em.c.source_item_id)
+    )
+    return [MentionCount(r.source_item_id, r.at) for r in rows]

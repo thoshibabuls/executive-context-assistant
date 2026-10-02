@@ -180,3 +180,116 @@ async def purge_sources(uow: UnitOfWork, source_item_ids: list[UUID]) -> None:
     ids = select(m.c.id).where(m.c.source_item_id.in_(source_item_ids))
     await uow.session.execute(delete(mp).where(mp.c.meeting_id.in_(ids)))
     await uow.session.execute(delete(m).where(m.c.source_item_id.in_(source_item_ids)))
+
+
+@dataclass(frozen=True)
+class MeetingDetail:
+    """A meeting with what indexing and retrieval read (Phase 2): calendar fields are SOURCE data."""
+
+    id: UUID
+    source_item_id: UUID
+    title: str | None
+    description: str | None
+    starts_at: datetime.datetime
+    ends_at: datetime.datetime
+    status: str
+    series_key: str | None
+    project_hint: str | None
+    attendee_ids: tuple[UUID, ...]
+
+
+async def _details(uow: UnitOfWork, rows: list[Any]) -> list[MeetingDetail]:
+    if not rows:
+        return []
+    mp = meeting_participants_table
+    people: dict[UUID, list[UUID]] = {r.id: [] for r in rows}
+    for p in await uow.session.execute(
+        select(mp.c.meeting_id, mp.c.person_id)
+        .where(mp.c.user_id == uow.user_id, mp.c.meeting_id.in_(list(people)))
+        .order_by(mp.c.meeting_id, mp.c.person_id)
+    ):
+        people[p.meeting_id].append(p.person_id)
+    return [
+        MeetingDetail(
+            r.id,
+            r.source_item_id,
+            r.title,
+            r.description,
+            r.starts_at,
+            r.ends_at,
+            r.status,
+            r.series_key,
+            r.project_hint,
+            tuple(people[r.id]),
+        )
+        for r in rows
+    ]
+
+
+_DETAIL_COLS = (
+    meetings_table.c.id,
+    meetings_table.c.source_item_id,
+    meetings_table.c.title,
+    meetings_table.c.description,
+    meetings_table.c.starts_at,
+    meetings_table.c.ends_at,
+    meetings_table.c.status,
+    meetings_table.c.series_key,
+    meetings_table.c.project_hint,
+)
+
+
+async def get_meeting_details(uow: UnitOfWork, meeting_ids: list[UUID]) -> list[MeetingDetail]:
+    m = meetings_table
+    if not meeting_ids:
+        return []
+    rows = (
+        await uow.session.execute(
+            select(*_DETAIL_COLS)
+            .where(m.c.user_id == uow.user_id, m.c.id.in_(meeting_ids), m.c.deleted_at.is_(None))
+            .order_by(m.c.starts_at, m.c.id)
+        )
+    ).all()
+    return await _details(uow, list(rows))
+
+
+async def meetings_by_sources(uow: UnitOfWork, source_item_ids: list[UUID]) -> list[MeetingDetail]:
+    m = meetings_table
+    if not source_item_ids:
+        return []
+    rows = (
+        await uow.session.execute(
+            select(*_DETAIL_COLS)
+            .where(
+                m.c.user_id == uow.user_id, m.c.source_item_id.in_(source_item_ids), m.c.deleted_at.is_(None)
+            )
+            .order_by(m.c.starts_at, m.c.id)
+        )
+    ).all()
+    return await _details(uow, list(rows))
+
+
+async def meeting_details_between(
+    uow: UnitOfWork,
+    start: datetime.datetime,
+    end: datetime.datetime,
+    *,
+    person_ids: list[UUID] | None = None,
+    include_cancelled: bool = False,
+    limit: int = 50,
+) -> list[MeetingDetail]:
+    """Meetings overlapping [start, end), optionally only those with one of ``person_ids``."""
+    m, mp = meetings_table, meeting_participants_table
+    stmt = select(*_DETAIL_COLS).where(
+        m.c.user_id == uow.user_id, m.c.starts_at < end, m.c.ends_at > start, m.c.deleted_at.is_(None)
+    )
+    if not include_cancelled:
+        stmt = stmt.where(m.c.status != "cancelled")
+    if person_ids:
+        stmt = stmt.where(
+            m.c.id.in_(
+                select(mp.c.meeting_id).where(mp.c.user_id == uow.user_id, mp.c.person_id.in_(person_ids))
+            )
+        )
+    rows = (await uow.session.execute(stmt.order_by(m.c.starts_at, m.c.id).limit(limit))).all()
+    return await _details(uow, list(rows))

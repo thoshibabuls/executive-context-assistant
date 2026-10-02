@@ -1,20 +1,29 @@
-"""Operator CLI (BACKEND_DESIGN.md §14.4). Slice 0.3 has one command: ``eca ops outbox retry``.
+"""Operator CLI (BACKEND_DESIGN.md §14.4): ``eca ops outbox retry`` and ``eca ops reembed``.
 
-Runs as the worker role (``API_WORKER_DATABASE_URL``): ``failed`` outbox rows → ``pending``.
+Runs as the worker role (``API_WORKER_DATABASE_URL``).
+- ``outbox retry``: ``failed`` outbox rows → ``pending``.
+- ``reembed`` (Phase 2): re-embed one user's chunks whose embedding model differs from the
+  current AI-04 model, after an embedding model change (AI_PIPELINE.md §10). Never scheduled;
+  ``--dry-run`` only counts.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime
 from collections.abc import Sequence
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from eca.intelligence import build_ai_client
 from eca.platform.config import Settings, get_settings
 from eca.platform.db import create_engine, create_session_factory
 from eca.platform.outbox import retry_failed
 from eca.platform.runtime import ensure_selector_event_loop_policy
 from eca.platform.uow import UnitOfWorkFactory
+from eca.retrieval import reembed_stale
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -24,24 +33,53 @@ def _parser() -> argparse.ArgumentParser:
     outbox = ops.add_parser("outbox").add_subparsers(dest="action", required=True)
     retry = outbox.add_parser("retry", help="re-queue failed outbox rows (failed -> pending, attempts = 0)")
     retry.add_argument("--event-id", type=UUID, default=None)
+    reembed = ops.add_parser("reembed", help="re-embed chunks of an older embedding model (one user)")
+    reembed.add_argument("--user", type=UUID, required=True)
+    reembed.add_argument("--limit", type=int, default=500)
+    reembed.add_argument("--dry-run", action="store_true")
     return parser
 
 
-async def outbox_retry(settings: Settings, event_id: UUID | None) -> int:
+def _factory(settings: Settings) -> tuple[UnitOfWorkFactory, AsyncEngine]:
     url = settings.api_worker_database_url
     if url is None or not url.get_secret_value():
         raise SystemExit("API_WORKER_DATABASE_URL is required")
     engine = create_engine(url.get_secret_value(), pool_size=1, max_overflow=0)
+    return UnitOfWorkFactory(create_session_factory(engine)), engine
+
+
+async def outbox_retry(settings: Settings, event_id: UUID | None) -> int:
+    factory, engine = _factory(settings)
     try:
-        async with UnitOfWorkFactory(create_session_factory(engine))(user_id=None) as uow:
+        async with factory(user_id=None) as uow:
             return await retry_failed(uow, event_id=event_id)
     finally:
         await engine.dispose()
 
 
+async def reembed(settings: Settings, user_id: UUID, limit: int, dry_run: bool) -> str:
+    factory, engine = _factory(settings)
+    try:
+        client = build_ai_client(settings, uow_factory=factory)
+        report = await reembed_stale(
+            factory,
+            client,
+            user_id=user_id,
+            limit=limit,
+            dry_run=dry_run,
+            now=datetime.datetime.now(datetime.UTC),
+        )
+    finally:
+        await engine.dispose()
+    return f"{report.stale} chunk(s) with another embedding model; re-embedded {report.embedded}"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     ensure_selector_event_loop_policy()
+    if args.area == "reembed":
+        print(asyncio.run(reembed(get_settings(), args.user, args.limit, args.dry_run)))
+        return 0
     count = asyncio.run(outbox_retry(get_settings(), args.event_id))
     print(f"re-queued {count} failed outbox event(s)")
     return 0

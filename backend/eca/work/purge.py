@@ -7,7 +7,7 @@
 - ``purge_sources`` (disconnect with purge): AI-only items whose evidence all comes from the
   purged sources are deleted with their events and links; user-touched items are kept with
   ``has_source_gap`` and redacted quotes; references to purged extractions are cleared.
-- ``purge_user`` (account deletion): every work row of the user.
+- ``purge_user`` (account deletion): every work row of the user, entity links included.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from uuid import UUID
 from sqlalchemy import delete, exists, select, union, update
 
 from eca.platform.uow import UnitOfWork
+from eca.work.links import purge_user_links
 from eca.work.models import (
     context_events_table,
     decisions_table,
@@ -171,6 +172,7 @@ async def purge_user(uow: UnitOfWork) -> None:
         work_items_table,
         decisions_table,
     )
+    await purge_user_links(uow)
     await uow.session.execute(delete(ce))
     await uow.session.execute(delete(ie))
     await uow.session.execute(update(wi).values(merged_into_id=None, reported_status_evidence_id=None))

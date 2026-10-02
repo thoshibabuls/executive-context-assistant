@@ -101,3 +101,20 @@ async def detach_connection(uow: UnitOfWork, connection_id: UUID) -> None:
     """Conversations left after a source purge no longer point at the deleted connection."""
     c = conversations_table
     await uow.session.execute(update(c).where(c.c.connection_id == connection_id).values(connection_id=None))
+
+
+async def sources_without_body(uow: UnitOfWork, source_item_ids: Sequence[UUID]) -> set[UUID]:
+    """Messages among these sources whose body is no longer stored (retention, deletion): the
+    retrieval index must not keep their text (CONTEXT_ARCHITECTURE.md §9.7, retention)."""
+    ids = list(source_item_ids)
+    if not ids:
+        return set()
+    m = messages_table
+    rows = await uow.session.execute(
+        select(m.c.source_item_id).where(
+            m.c.user_id == uow.user_id,
+            m.c.source_item_id.in_(ids),
+            (m.c.body_purged_at.is_not(None)) | (m.c.deleted_at.is_not(None)),
+        )
+    )
+    return {r.source_item_id for r in rows}

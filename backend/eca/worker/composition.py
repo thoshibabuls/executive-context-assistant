@@ -17,6 +17,7 @@ import eca.ingestion
 import eca.intelligence
 import eca.meetings
 import eca.privacy
+import eca.retrieval
 import eca.work
 from eca.platform.clock import Clock, SystemClock
 from eca.platform.config import Settings
@@ -26,7 +27,15 @@ from eca.platform.uow import UnitOfWorkFactory
 from eca.worker.runner import ReconcileHook
 
 # Imported for their handler registrations.
-_DOMAIN_MODULES = (eca.ingestion, eca.communication, eca.meetings, eca.work, eca.attention, eca.privacy)
+_DOMAIN_MODULES = (
+    eca.ingestion,
+    eca.communication,
+    eca.meetings,
+    eca.work,
+    eca.attention,
+    eca.privacy,
+    eca.retrieval,
+)
 
 
 def production_registry() -> EventRegistry:

@@ -4,16 +4,17 @@ Deletion jobs are ordered (children before parents, no cascades, §13.2), idempo
 resumable: every step can run again after a crash; ``deletion_jobs.progress`` records the steps
 done for operators. Each step is its own short worker transaction for the user.
 
-Account deletion order (§13.3): revoke tokens → work (mentions first: they point at evidence)
-→ communication → meetings → intelligence → people → ingestion → connections → final step
-(idempotency keys, feedback, sessions, the user's event consumptions and outbox rows, audit rows
-replaced by one content-free record, the job row, the user row) in one transaction.
+Account deletion order (§13.3): revoke tokens → retrieval (chunks) → work (mentions first: they
+point at evidence) → communication → meetings → intelligence → people → ingestion → connections
+→ final step (idempotency keys, feedback, sessions, the user's event consumptions and outbox
+rows, audit rows replaced by one content-free record, the job row, the user row) in one
+transaction.
 
-Source purge (§13.3), per batch of the connection's source items: mentions → work (evidence
-quotes redacted, AI-only items deleted, user-touched items kept with ``has_source_gap``) →
-messages and conversations → meetings → extractions → source items (tombstones where redacted
-evidence still points at them). Then evidence orphaned by later batches, cursors and the
-connection.
+Source purge (§13.3), per batch of the connection's source items: chunks and continuation links
+→ mentions → work (evidence quotes redacted, AI-only items deleted, user-touched items kept with
+``has_source_gap``) → messages and conversations → meetings → extractions → source items
+(tombstones where redacted evidence still points at them). Then evidence orphaned by later
+batches, cursors and the connection.
 """
 
 from __future__ import annotations
@@ -29,7 +30,17 @@ import structlog
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
-from eca import communication, connections, identity, ingestion, intelligence, meetings, people, work
+from eca import (
+    communication,
+    connections,
+    identity,
+    ingestion,
+    intelligence,
+    meetings,
+    people,
+    retrieval,
+    work,
+)
 from eca.platform.audit import audit_log_table, record_audit
 from eca.platform.errors import NotFound
 from eca.platform.events import NewEvent
@@ -97,6 +108,7 @@ async def _work_step(uow: UnitOfWork) -> None:
 
 
 _ACCOUNT_STEPS: tuple[tuple[str, Step], ...] = (
+    ("retrieval", retrieval.purge_user),
     ("work", _work_step),
     ("communication", communication.purge_user),
     ("meetings", meetings.purge_user),
@@ -207,6 +219,8 @@ async def _purge_batch(uow: UnitOfWork, source_ids: list[UUID], *, now: datetime
     """One batch of sources, in one transaction. Returns the sources kept as tombstones."""
     extraction_ids = await intelligence.extraction_ids_for_sources(uow, source_ids)
     conversation_ids = await communication.conversation_ids_for_sources(uow, source_ids)
+    await retrieval.purge_sources(uow, source_ids)  # chunks reference sources, conversations, meetings
+    await work.delete_links(uow, "conversation", conversation_ids)
     await people.purge_mentions_for_sources(uow, source_ids)
     await work.purge_sources(uow, source_ids, extraction_ids)
     await work.detach_conversations(uow, conversation_ids)
@@ -297,6 +311,7 @@ async def run_retention(factory: UnitOfWorkFactory, *, now: datetime.datetime) -
     for user_id in user_ids:
         async with factory(user_id=user_id) as uow:
             bodies += await communication.purge_bodies(uow, now=now)
+            await retrieval.purge_unretained(uow)  # purged bodies are not retrievable (§9.7)
             await purge_expired_keys(uow, now=now)
     log.info("retention_done", users=len(user_ids), bodies=bodies, ai_calls=ai_deleted, outbox=outbox_deleted)
     return RetentionReport(len(user_ids), bodies, ai_deleted, outbox_deleted)
@@ -316,6 +331,7 @@ _DATA_COUNTS = {
     "evidence_quotes": "SELECT count(*) FROM evidence",
     "ai_extractions": "SELECT count(*) FROM extractions",
     "source_items": "SELECT count(*) FROM source_items WHERE deleted_at IS NULL",
+    "search_index_chunks": "SELECT count(*) FROM chunks",
 }
 
 
