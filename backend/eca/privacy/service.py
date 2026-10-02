@@ -312,6 +312,7 @@ async def run_retention(factory: UnitOfWorkFactory, *, now: datetime.datetime) -
         async with factory(user_id=user_id) as uow:
             bodies += await communication.purge_bodies(uow, now=now)
             await retrieval.purge_unretained(uow)  # purged bodies are not retrievable (§9.7)
+            await retrieval.purge_old_traces(uow, now=now)  # retrieval traces: 90 days (§6.2)
             await purge_expired_keys(uow, now=now)
     log.info("retention_done", users=len(user_ids), bodies=bodies, ai_calls=ai_deleted, outbox=outbox_deleted)
     return RetentionReport(len(user_ids), bodies, ai_deleted, outbox_deleted)

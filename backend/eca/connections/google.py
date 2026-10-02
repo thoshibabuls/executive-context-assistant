@@ -20,7 +20,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from eca.connections.events import CONNECTION_STATUS_CHANGED, ConnectionStatusChanged
-from eca.connections.models import connections_table
+from eca.connections.models import connections_table, sync_cursors_table
 from eca.connections.tokens import TokenCrypto
 from eca.connectors import CAPABILITY_SCOPES, refresh_access_token, revoke_token
 from eca.identity import (
@@ -251,3 +251,45 @@ async def disconnect(
         .values(status="revoked", refresh_token_ciphertext=None, revoked_at=now)
     )
     await _status_event(uow, connection_id, "revoked")
+
+
+@dataclass(frozen=True)
+class SyncState:
+    """One connection's state for the coverage block (CONTEXT_ARCHITECTURE.md §9.4, §9.10)."""
+
+    connection_id: UUID
+    provider: str
+    account_email: str
+    status: str  # active | paused | needs_reauth | revoked | error
+    capabilities: tuple[str, ...]  # mail | calendar
+    last_success: dict[str, datetime.datetime | None]  # resource -> last successful sync
+
+
+async def sync_states(uow: UnitOfWork) -> list[SyncState]:
+    """Every connection of the user with its capabilities and last successful sync per resource.
+
+    Google capabilities come from the granted scopes (a revoked calendar scope removes
+    ``calendar``); other providers (the fake connector) have the resources they have cursors for.
+    """
+    t, c = connections_table, sync_cursors_table
+    conns = (
+        await uow.session.execute(
+            select(t.c.id, t.c.provider, t.c.account_email, t.c.granted_scopes, t.c.status)
+            .where(t.c.user_id == uow.user_id)
+            .order_by(t.c.created_at, t.c.id)
+        )
+    ).all()
+    cursors: dict[UUID, dict[str, datetime.datetime | None]] = {}
+    for cur in await uow.session.execute(
+        select(c.c.connection_id, c.c.resource, c.c.last_success_at).where(c.c.user_id == uow.user_id)
+    ):
+        cursors.setdefault(cur.connection_id, {})[cur.resource] = cur.last_success_at
+    out = []
+    for r in conns:
+        resources = cursors.get(r.id, {})
+        if r.provider == "google":
+            caps = capabilities_for(tuple(r.granted_scopes))
+        else:
+            caps = tuple(sorted(resources))
+        out.append(SyncState(r.id, r.provider, r.account_email, r.status, caps, dict(resources)))
+    return out

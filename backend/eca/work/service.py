@@ -93,6 +93,13 @@ class WorkItemView:
     priority_score: float | None = None
     priority_reasons: tuple[dict[str, Any], ...] = ()
     has_source_gap: bool = False
+    # Read-side fields (Phase 2 cards and change feed).
+    reported_status_at: datetime.datetime | None = None
+    reported_status_evidence_id: UUID | None = None
+    project_hint: str | None = None
+    last_activity_at: datetime.datetime | None = None
+    stale: bool = False
+    created_at: datetime.datetime | None = None
 
 
 def model_dedupe_key(extraction_id: UUID, index: int, event_type: str) -> bytes:
@@ -548,6 +555,12 @@ def _view(row: Any, sources: tuple[UUID, ...] = ()) -> WorkItemView:
         priority_score=getattr(row, "priority_score", None),
         priority_reasons=tuple(getattr(row, "priority_reasons", None) or ()),
         has_source_gap=bool(getattr(row, "has_source_gap", False)),
+        reported_status_at=getattr(row, "reported_status_at", None),
+        reported_status_evidence_id=getattr(row, "reported_status_evidence_id", None),
+        project_hint=getattr(row, "project_hint", None),
+        last_activity_at=getattr(row, "last_activity_at", None),
+        stale=bool(getattr(row, "stale", False)),
+        created_at=getattr(row, "created_at", None),
     )
 
 

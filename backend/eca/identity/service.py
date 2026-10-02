@@ -7,7 +7,8 @@ sign-in callback will call the same function. There is no other way to create a 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -28,6 +29,7 @@ class UserSettings:
     user_id: UUID
     timezone: str
     status: str
+    work_hours: dict[str, Any] = field(default_factory=dict)  # users.work_hours (coverage, §9.10)
 
 
 async def create_user(uow: UnitOfWork, *, email: str, display_name: str, timezone: str = "UTC") -> UUID:
@@ -49,12 +51,14 @@ async def get_user_settings(uow: UnitOfWork) -> UserSettings:
     """The current user's timezone and status (columns the worker role may read, §7.6)."""
     row = (
         await uow.session.execute(
-            select(users_table.c.id, users_table.c.timezone, users_table.c.status).where(
-                users_table.c.id == uow.user_id
-            )
+            select(
+                users_table.c.id, users_table.c.timezone, users_table.c.status, users_table.c.work_hours
+            ).where(users_table.c.id == uow.user_id)
         )
     ).one()
-    return UserSettings(user_id=row.id, timezone=row.timezone, status=row.status)
+    return UserSettings(
+        user_id=row.id, timezone=row.timezone, status=row.status, work_hours=dict(row.work_hours or {})
+    )
 
 
 async def list_active_user_ids(uow: UnitOfWork) -> list[UUID]:

@@ -37,6 +37,8 @@ from eca.ingestion.service import (
     store_messages,
     sync_calendar,
     sync_mail,
+    visible_among,
+    visible_source_ids,
 )
 from eca.ingestion.stages import STAGES, InvalidStageTransition, check_transition
 from eca.ingestion.tasks import SYNC_HANDLER, periodic_tasks, request_syncs
@@ -79,4 +81,6 @@ __all__ = [
     "store_messages",
     "sync_calendar",
     "sync_mail",
+    "visible_among",
+    "visible_source_ids",
 ]

@@ -54,6 +54,7 @@ messages_table = Table(
     Column("triage", JSONB),
     Column("triage_extraction_id", PG_UUID(as_uuid=True)),
     Column("alias_source_item_ids", ARRAY(PG_UUID(as_uuid=True)), nullable=False),
+    Column("created_at", DateTime(timezone=True)),
     Column("deleted_at", DateTime(timezone=True)),
 )
 

@@ -9,12 +9,14 @@ from eca.connections.events import CONNECTION_STATUS_CHANGED, ConnectionStatusCh
 from eca.connections.google import (
     ConnectionView,
     GoogleOAuthConfig,
+    SyncState,
     access_token,
     capabilities_for,
     complete_connect,
     disconnect,
     list_connections,
     start_connect,
+    sync_states,
 )
 from eca.connections.purge import purge_connection, purge_user, revoke_all_tokens
 from eca.connections.service import (
@@ -38,6 +40,7 @@ __all__ = [
     "ConnectionView",
     "CursorState",
     "GoogleOAuthConfig",
+    "SyncState",
     "TokenCrypto",
     "access_token",
     "acquire_lease",
@@ -58,4 +61,5 @@ __all__ = [
     "revoke_all_tokens",
     "save_page_token",
     "start_connect",
+    "sync_states",
 ]

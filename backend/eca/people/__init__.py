@@ -5,6 +5,7 @@ Other modules import only from this package root.
 """
 
 from eca.people.identity_rules import is_public_domain, normalize_alias, normalize_email
+from eca.people.names import NameMatch, match_names
 from eca.people.purge import purge_mentions, purge_mentions_for_sources, purge_user
 from eca.people.queries import (
     PERSON_EDITABLE,
@@ -45,6 +46,7 @@ __all__ = [
     "AliasEntry",
     "MentionCount",
     "MentionIn",
+    "NameMatch",
     "OrganizationView",
     "PersonDetail",
     "PersonRef",
@@ -62,6 +64,7 @@ __all__ = [
     "is_public_domain",
     "list_organizations",
     "list_people_page",
+    "match_names",
     "mentions_of",
     "merge_persons",
     "merged_ids",

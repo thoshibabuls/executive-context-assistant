@@ -21,7 +21,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import select, text, update
+from sqlalchemy import Select, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from eca.connections import (
@@ -548,3 +548,35 @@ async def reconcile_stages(uow_factory: UnitOfWorkFactory, *, now: datetime.date
     if total:
         log.info("source_item_stages_reconciled", republished=total)
     return total
+
+
+def visible_source_ids(
+    user_id: UUID,
+    *,
+    exclude_calendar_connections: Sequence[UUID] = (),
+    only: Sequence[UUID] | None = None,
+) -> Select[Any]:
+    """Source items a retriever may use (CONTEXT_ARCHITECTURE.md §9.7, §9.10): the user's, not
+    deleted, not trashed, and no calendar event of a connection that lost the calendar scope.
+    Returned as a subquery so the retriever applies it inside its own statement, before ranking."""
+    t = source_items_table
+    stmt = select(t.c.id).where(t.c.user_id == user_id, t.c.deleted_at.is_(None), ~t.c.trashed)
+    excluded = list(exclude_calendar_connections)
+    if excluded:
+        stmt = stmt.where(~((t.c.kind == "calendar_event") & t.c.connection_id.in_(excluded)))
+    if only is not None:
+        stmt = stmt.where(t.c.id.in_(list(only)))
+    return stmt
+
+
+async def visible_among(
+    uow: UnitOfWork, source_item_ids: Sequence[UUID], *, exclude_calendar_connections: Sequence[UUID] = ()
+) -> set[UUID]:
+    """The visible subset of ``source_item_ids`` (for evidence quotes packed with items)."""
+    ids = list(source_item_ids)
+    if not ids or uow.user_id is None:
+        return set()
+    stmt = visible_source_ids(
+        uow.user_id, exclude_calendar_connections=exclude_calendar_connections, only=ids
+    )
+    return {UUID(str(v)) for v in (await uow.session.execute(stmt)).scalars()}
