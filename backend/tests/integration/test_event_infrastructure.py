@@ -388,7 +388,7 @@ async def test_failed_handler_leaves_no_consumption_and_can_be_retried(infra: In
     async def flaky(ctx: HandlerContext) -> None:
         nonlocal calls
         calls += 1
-        await ctx.uow.session.execute(
+        await ctx.tx.session.execute(
             text("INSERT INTO rt_effects (event_id, handler) VALUES (:e, 'gated')"), {"e": ctx.envelope.id}
         )
         if calls == 1:
@@ -411,7 +411,7 @@ async def test_concurrent_duplicate_delivery_is_safe(infra: Infra, first_outcome
     entered = asyncio.Event()
 
     async def gated(ctx: HandlerContext) -> None:
-        await ctx.uow.session.execute(
+        await ctx.tx.session.execute(
             text("INSERT INTO rt_effects (event_id, handler) VALUES (:e, 'gated')"), {"e": ctx.envelope.id}
         )
         if not entered.is_set():

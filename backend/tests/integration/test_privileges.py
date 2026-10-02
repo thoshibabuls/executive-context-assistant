@@ -33,7 +33,25 @@ EXPECTED_TABLES: dict[str, dict[str, set[str]]] = {
     "ai_cost_rollups": {RUNTIME_ROLE: {"SELECT"}, WORKER_ROLE: set(DML)},
 }
 RLS_TABLES = ("outbox", "event_consumptions", "ai_calls", "ai_cost_rollups")
+# Batch A business tables: per-user isolation for all roles, DML for both runtime roles (§7.6).
+BUSINESS_TABLES = (
+    "organizations",
+    "persons",
+    "person_identifiers",
+    "connections",
+    "sync_cursors",
+    "source_items",
+    "conversations",
+    "messages",
+    "message_participants",
+    "entity_mentions",
+)
+# users: the API keeps DML on its own row; the worker has column SELECT only (§7.6 exception).
+USERS_WORKER_COLUMNS = {"id", "status", "timezone", "work_hours"}
 INFRASTRUCTURE_TABLES = set(EXPECTED_TABLES)
+for _table in BUSINESS_TABLES:
+    EXPECTED_TABLES[_table] = {RUNTIME_ROLE: set(DML), WORKER_ROLE: set(DML)}
+EXPECTED_TABLES["users"] = {RUNTIME_ROLE: set(DML), WORKER_ROLE: set()}
 
 
 def _table_privs(conn: psycopg.Connection, role: str, table: str) -> set[str]:
@@ -56,8 +74,17 @@ def _public_table_privs(conn: psycopg.Connection, table: str) -> set[str]:
 def _assert_matrix(admin_url: str) -> None:
     with psycopg.connect(admin_url) as conn:
         tables = {r[0] for r in conn.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")}
-        # 5. every migrated table is classified (no business tables exist yet in slice 0.3)
-        assert tables == INFRASTRUCTURE_TABLES
+        # 5. every migrated table is classified: infrastructure, or business with _user_isolation
+        assert tables == INFRASTRUCTURE_TABLES | set(BUSINESS_TABLES) | {"users"}
+        columns = {
+            r[0]: r[1]
+            for r in conn.execute(
+                "SELECT column_name, has_column_privilege(%s, 'public.users', column_name, 'SELECT') "
+                "FROM information_schema.columns WHERE table_name = 'users'",
+                (WORKER_ROLE,),
+            )
+        }
+        assert {c for c, granted in columns.items() if granted} == USERS_WORKER_COLUMNS
 
         # 1. tables: API role, worker role and PUBLIC
         for table, expected in EXPECTED_TABLES.items():
@@ -137,6 +164,14 @@ def _assert_matrix(admin_url: str) -> None:
             )
         }
         assert rls == {t: (True, True) for t in RLS_TABLES}
+        business_rls = {
+            r[0]: (r[1], r[2])
+            for r in conn.execute(
+                "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = ANY(%s)",
+                ([*BUSINESS_TABLES, "users"],),
+            )
+        }
+        assert business_rls == {t: (True, True) for t in [*BUSINESS_TABLES, "users"]}
         policies = {
             (r[0], r[1], r[2], tuple(r[3]), r[4], r[5])
             for r in conn.execute(
@@ -173,6 +208,26 @@ def _assert_matrix(admin_url: str) -> None:
                 None,
             ),
             ("ai_cost_rollups", "ai_cost_rollups_worker_all", "ALL", (WORKER_ROLE,), "true", "true"),
+            *(
+                (
+                    t,
+                    f"{t}_user_isolation",
+                    "ALL",
+                    ("public",),
+                    "(user_id = eca_current_user_id())",
+                    "(user_id = eca_current_user_id())",
+                )
+                for t in BUSINESS_TABLES
+            ),
+            (
+                "users",
+                "users_user_isolation",
+                "ALL",
+                ("public",),
+                "(id = eca_current_user_id())",
+                "(id = eca_current_user_id())",
+            ),
+            ("users", "users_worker_enumerate", "SELECT", (WORKER_ROLE,), "true", None),
         }
 
         # 4. role attributes and separation

@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import signal
 import sys
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
 import structlog
@@ -23,7 +23,7 @@ from eca.platform import crashpoints
 from eca.platform.config import Settings
 from eca.platform.db import create_engine, create_session_factory
 from eca.platform.dispatch import Dispatcher, reconcile_once
-from eca.platform.events import EventRegistry
+from eca.platform.events import EventRegistry, Resources
 from eca.platform.jobs import (
     PeriodicTaskSpec,
     create_job_app,
@@ -38,6 +38,8 @@ from eca.worker.config import WorkerConfig
 log = structlog.get_logger("eca.worker")
 
 Mode = Literal["all", "dispatcher", "jobs"]
+ResourcesBuilder = Callable[[UnitOfWorkFactory], Resources]
+ReconcileHook = Callable[[UnitOfWorkFactory], Awaitable[object]]
 
 
 class WorkerStartupError(RuntimeError):
@@ -63,8 +65,15 @@ async def run_worker(
     mode: Mode = "all",
     stop: asyncio.Event | None = None,
     periodic: Sequence[PeriodicTaskSpec] = (),
+    build_resources: ResourcesBuilder | None = None,
+    reconcile_hooks: Sequence[ReconcileHook] = (),
 ) -> None:
-    """Run until ``stop`` is set or SIGINT/SIGTERM arrives."""
+    """Run until ``stop`` is set or SIGINT/SIGTERM arrives.
+
+    ``build_resources`` gives handlers their process-level dependencies (AI client, connector
+    registry; §5.6). ``reconcile_hooks`` run after each infrastructure reconcile pass (the
+    per-user source-item stage scan, §7.5).
+    """
     crashpoints.configure(is_production=settings.is_production)
     url = _worker_url(settings)
     stop = stop or asyncio.Event()
@@ -80,11 +89,14 @@ async def run_worker(
             )
         uow_factory = UnitOfWorkFactory(create_session_factory(engine))
         job_app = create_job_app(_conninfo(url), pool_max_size=config.job_pool_max_size)
-        register_handler_tasks(job_app, registry, uow_factory, config.handler_retry)
+        resources = build_resources(uow_factory) if build_resources is not None else Resources()
+        register_handler_tasks(job_app, registry, uow_factory, config.handler_retry, resources)
         dispatcher = Dispatcher(uow_factory, registry, job_app, config.dispatch)
 
         async def reconcile() -> None:
             await reconcile_once(dispatcher, uow_factory, min_age_s=config.reconcile_min_age_s)
+            for hook in reconcile_hooks:
+                await hook(uow_factory)
 
         register_infrastructure_tasks(
             job_app, reconcile=reconcile, stalled_timeout_s=config.stalled_timeout_s

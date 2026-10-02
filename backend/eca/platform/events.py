@@ -10,15 +10,15 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal, TypeVar, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
 from eca.platform.queues import QUEUE_CONCURRENCY
-from eca.platform.uow import UnitOfWork
+from eca.platform.uow import UnitOfWork, UnitOfWorkFactory
 
 _EVENT_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{2,99}$")
 _HANDLER_NAME = re.compile(r"^[a-z][a-z0-9_.]{2,99}$")
@@ -53,12 +53,61 @@ class NewEvent:
     payload: BaseModel
 
 
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class Resources:
+    """Process-level dependencies handed to handlers by the worker composition (§5.6).
+
+    A typed lookup keyed by class: ``resources.get(AIClient)``. Domain modules never build these
+    themselves, so tests and the worker decide what a handler talks to.
+    """
+
+    _values: dict[type, object] = field(default_factory=dict)
+
+    @classmethod
+    def of(cls, *values: object) -> Resources:
+        return cls({type(v): v for v in values})
+
+    def get(self, kind: type[T]) -> T:
+        for key, value in self._values.items():
+            if issubclass(key, kind):
+                return cast(T, value)
+        raise LookupError(f"No resource of type {kind.__name__} was provided to this worker")
+
+
+HandlerMode = Literal["consumption", "natural_key"]
+
+
 @dataclass(frozen=True)
 class HandlerContext:
-    uow: UnitOfWork  # the handler's own transaction (worker role, app.user_id = event user)
+    """What a handler receives.
+
+    ``consumption`` handlers get ``uow``: the wrapper's transaction, which already holds the
+    ``event_consumptions`` row. ``natural_key`` handlers (external calls, §7.4) get ``uow`` = None
+    and run their own short transactions from ``uow_factory``.
+    """
+
+    uow: UnitOfWork | None
     envelope: EventEnvelope
     payload: BaseModel  # validated with the payload model registered for the event type
     attempt: int  # earlier runs of this job (0 on the first run)
+    uow_factory: UnitOfWorkFactory | None = None
+    resources: Resources = field(default_factory=Resources)
+
+    @property
+    def tx(self) -> UnitOfWork:
+        """The handler transaction of a ``consumption`` handler."""
+        if self.uow is None:
+            raise RuntimeError("natural_key handlers have no wrapper transaction; use uow_factory")
+        return self.uow
+
+    @property
+    def factory(self) -> UnitOfWorkFactory:
+        if self.uow_factory is None:
+            raise RuntimeError("no unit-of-work factory in this handler context")
+        return self.uow_factory
 
 
 HandlerFunc = Callable[[HandlerContext], Awaitable[None]]
@@ -70,6 +119,7 @@ class HandlerSpec:
     event_type: str
     queue: str
     func: HandlerFunc
+    mode: HandlerMode = "consumption"
 
 
 class EventRegistry:
@@ -87,7 +137,7 @@ class EventRegistry:
         self._payload_models[event_type] = payload_model
 
     def handles(
-        self, event_type: str, *, name: str, queue: str = "events"
+        self, event_type: str, *, name: str, queue: str = "events", mode: HandlerMode = "consumption"
     ) -> Callable[[HandlerFunc], HandlerFunc]:
         if not _HANDLER_NAME.fullmatch(name):
             raise ValueError(f"Invalid handler name: {name!r}")
@@ -99,7 +149,9 @@ class EventRegistry:
         def decorator(func: HandlerFunc) -> HandlerFunc:
             if name in self._handlers:
                 raise ValueError(f"Handler name already registered: {name!r}")
-            self._handlers[name] = HandlerSpec(name=name, event_type=event_type, queue=queue, func=func)
+            self._handlers[name] = HandlerSpec(
+                name=name, event_type=event_type, queue=queue, func=func, mode=mode
+            )
             return func
 
         return decorator

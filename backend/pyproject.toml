@@ -118,6 +118,8 @@ source_modules = [
     "eca.privacy", "eca.platform", "eca.api", "eca.worker",
 ]
 forbidden_modules = ["eca.connectors"]
+# The rule is about direct imports: communication -> ingestion -> connectors is the intended path.
+allow_indirect_imports = "True"
 
 [[tool.importlinter.contracts]]
 name = "Platform is the base layer and imports no domain module"
@@ -141,3 +143,41 @@ name = "The application never imports the evaluation harness"
 type = "forbidden"
 source_modules = ["eca"]
 forbidden_modules = ["eca_evals"]
+
+# ---------------------------------------------------------------- Batch A dependency rules (§5.2, §5.6)
+[[tool.importlinter.contracts]]
+name = "intelligence imports no domain module (receives DTOs; never reads source tables)"
+type = "forbidden"
+source_modules = ["eca.intelligence"]
+forbidden_modules = [
+    "eca.identity", "eca.connections", "eca.ingestion", "eca.connectors", "eca.communication",
+    "eca.meetings", "eca.people", "eca.work", "eca.projects", "eca.retrieval", "eca.chat",
+    "eca.attention", "eca.privacy",
+]
+
+[[tool.importlinter.contracts]]
+name = "communication depends only on people and ingestion"
+type = "forbidden"
+source_modules = ["eca.communication"]
+forbidden_modules = ["eca.work", "eca.intelligence", "eca.meetings", "eca.projects", "eca.attention"]
+
+[[tool.importlinter.contracts]]
+name = "people depends only on identity"
+type = "forbidden"
+source_modules = ["eca.people"]
+forbidden_modules = [
+    "eca.communication", "eca.work", "eca.ingestion", "eca.intelligence", "eca.connections",
+    "eca.meetings", "eca.projects",
+]
+
+[[tool.importlinter.contracts]]
+name = "ingestion depends only on connections, identity and connectors"
+type = "forbidden"
+source_modules = ["eca.ingestion"]
+forbidden_modules = ["eca.communication", "eca.work", "eca.people", "eca.intelligence", "eca.meetings"]
+
+[[tool.importlinter.contracts]]
+name = "identity and connections are leaf domain modules"
+type = "forbidden"
+source_modules = ["eca.identity", "eca.connections"]
+forbidden_modules = ["eca.ingestion", "eca.communication", "eca.work", "eca.people", "eca.intelligence"]

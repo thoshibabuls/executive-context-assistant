@@ -1,7 +1,8 @@
 """Production worker entry point: ``python -m eca.worker``.
 
-Uses the worker role (``API_WORKER_DATABASE_URL``), the default registry, ``WorkerConfig()``
-and the modules' periodic tasks (``intelligence``: ``cost_rollup``).
+Uses the worker role (``API_WORKER_DATABASE_URL``), ``WorkerConfig()`` and the production
+composition (``eca.worker.composition``): the domain handlers, their resources, the source-item
+stage scan and the modules' periodic tasks.
 It refuses to start when ``ECA_TEST_CRASH_POINT`` is set in production or names an unknown point.
 """
 
@@ -9,11 +10,16 @@ from __future__ import annotations
 
 import asyncio
 
-from eca.intelligence import periodic_tasks
 from eca.platform.config import get_settings
 from eca.platform.logging import configure_logging
 from eca.platform.runtime import ensure_selector_event_loop_policy
-from eca.worker import WorkerConfig, build_default_registry, run_worker
+from eca.worker import WorkerConfig, run_worker
+from eca.worker.composition import (
+    production_periodic_tasks,
+    production_reconcile_hooks,
+    production_registry,
+    production_resources,
+)
 
 
 def main() -> None:
@@ -22,10 +28,12 @@ def main() -> None:
     ensure_selector_event_loop_policy()
     asyncio.run(
         run_worker(
-            registry=build_default_registry(),
+            registry=production_registry(),
             config=WorkerConfig(),
             settings=settings,
-            periodic=periodic_tasks(),
+            periodic=production_periodic_tasks(),
+            build_resources=production_resources(settings),
+            reconcile_hooks=production_reconcile_hooks(),
         )
     )
 

@@ -35,8 +35,8 @@ def _tables(admin_url: str) -> set[str]:
 def test_chain_is_linear_and_ordered() -> None:
     script = ScriptDirectory.from_config(alembic_config("postgresql://unused/unused"))
     chain = [rev.revision for rev in reversed(list(script.walk_revisions()))]
-    assert chain == ["0001", "0002", "0003", "0004", "0005"]
-    assert script.get_heads() == ["0005"]
+    assert chain == ["0001", "0002", "0003", "0004", "0005", "0006", "0007"]
+    assert script.get_heads() == ["0007"]
 
 
 def test_each_revision_up_down_up(fresh_db: TempDatabase) -> None:
@@ -56,11 +56,26 @@ def test_each_revision_up_down_up(fresh_db: TempDatabase) -> None:
         },
     }
     expected["0005"] = expected["0004"] | {"ai_calls", "ai_cost_rollups"}
+    expected["0006"] = expected["0005"] | {
+        "users",
+        "organizations",
+        "persons",
+        "person_identifiers",
+        "connections",
+        "sync_cursors",
+    }
+    expected["0007"] = expected["0006"] | {
+        "source_items",
+        "conversations",
+        "messages",
+        "message_participants",
+        "entity_mentions",
+    }
     for rev, tables in expected.items():
         command.upgrade(cfg, rev)
         assert _revision(fresh_db.admin_url) == rev
         assert _tables(fresh_db.admin_url) == tables
-    for rev in ("0004", "0003", "0002", "0001"):
+    for rev in ("0006", "0005", "0004", "0003", "0002", "0001"):
         command.downgrade(cfg, rev)
         assert _revision(fresh_db.admin_url) == rev
         assert _tables(fresh_db.admin_url) == expected[rev]
@@ -73,7 +88,7 @@ def test_each_revision_up_down_up(fresh_db: TempDatabase) -> None:
         ).fetchall()
     assert leftovers == [(0,), (0,), (0,)]
     command.upgrade(cfg, "head")
-    assert _revision(fresh_db.admin_url) == "0005"
+    assert _revision(fresh_db.admin_url) == "0007"
 
 
 def test_outbox_schema_matches_design(migrated_db: TempDatabase) -> None:
@@ -120,9 +135,27 @@ def test_outbox_schema_matches_design(migrated_db: TempDatabase) -> None:
     )
     assert constraints["pk_event_consumptions"] == "PRIMARY KEY (event_id, handler)"
     assert constraints["fk_event_consumptions_event"] == "FOREIGN KEY (event_id) REFERENCES outbox(id)"
-    # Deferred FK (BACKEND_DESIGN.md §7.3.1): no foreign key from outbox to anything yet.
-    assert not [name for name, d in constraints.items() if name.startswith("fk_outbox")]
-    assert "users" not in _tables(migrated_db.admin_url)
+    # The deferred FK (BACKEND_DESIGN.md §7.3.1) arrives with ``users`` in migration 0006 (Batch A).
+    assert constraints["fk_outbox_user"] == "FOREIGN KEY (user_id) REFERENCES users(id)"
+
+
+def test_outbox_user_fk_is_enforced(migrated_db: TempDatabase) -> None:
+    """Slice 1.1 test from IMPLEMENTATION_PLAN.md: an outbox row for an unknown user fails."""
+    with pytest.raises(psycopg.errors.ForeignKeyViolation), psycopg.connect(migrated_db.admin_url) as conn:
+        conn.execute(
+            "INSERT INTO outbox (id, user_id, event_type, aggregate_type, aggregate_id, payload) "
+            "VALUES (%s, %s, 'x.Y', 'x', %s, '{}')",
+            (uuid.uuid4(), uuid.uuid4(), uuid.uuid4()),
+        )
+    with psycopg.connect(migrated_db.admin_url) as conn:
+        fks = {
+            r[0]
+            for r in conn.execute(
+                "SELECT conname FROM pg_constraint WHERE contype = 'f' AND conname IN "
+                "('fk_outbox_user', 'fk_ai_calls_user', 'fk_ai_cost_rollups_user')"
+            )
+        }
+    assert fks == {"fk_outbox_user", "fk_ai_calls_user", "fk_ai_cost_rollups_user"}
 
 
 def test_event_consumptions_reject_unknown_event(migrated_db: TempDatabase) -> None:

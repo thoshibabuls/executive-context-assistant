@@ -71,6 +71,8 @@ def start_worker(
     *,
     crash: str | None = None,
     batch_size: int = 100,
+    launcher: str = "tests.reliability.support.worker_main",
+    extra_env: dict[str, str] | None = None,
 ) -> WorkerProcess:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("API_", "ECA_TEST_CRASH"))}
     env.update(
@@ -82,6 +84,7 @@ def start_worker(
             "PYTHONUNBUFFERED": "1",
         }
     )
+    env.update(extra_env or {})
     if crash is not None:
         env[crashpoints.ENV_VAR] = crash
     log_path = log_dir / f"worker-{mode}-{time.monotonic_ns()}.log"
@@ -90,7 +93,7 @@ def start_worker(
             [
                 sys.executable,
                 "-m",
-                "tests.reliability.support.worker_main",
+                launcher,
                 "--mode",
                 mode,
                 "--batch-size",
@@ -106,9 +109,15 @@ def start_worker(
 
 @contextmanager
 def running_worker(
-    db: TempDatabase, mode: str, log_dir: Path, *, batch_size: int = 100
+    db: TempDatabase,
+    mode: str,
+    log_dir: Path,
+    *,
+    batch_size: int = 100,
+    launcher: str = "tests.reliability.support.worker_main",
+    extra_env: dict[str, str] | None = None,
 ) -> Iterator[WorkerProcess]:
-    worker = start_worker(db, mode, log_dir, batch_size=batch_size)
+    worker = start_worker(db, mode, log_dir, batch_size=batch_size, launcher=launcher, extra_env=extra_env)
     try:
         yield worker
     finally:

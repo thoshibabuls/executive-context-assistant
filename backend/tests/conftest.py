@@ -109,13 +109,33 @@ def temp_database(base_admin: str, name: str, admin_url: str) -> TempDatabase:
     )
 
 
+# Fixed user IDs used by the infrastructure tests (slices 0.3, 0.4). Since Batch A, outbox and
+# ai_calls rows reference users (fk_outbox_user, fk_ai_calls_user), so migrated test databases
+# contain these users. Pipeline tests create their own users through identity.create_user.
+STANDARD_TEST_USERS = tuple(
+    uuid.UUID(f"00000000-0000-7000-8000-{suffix:0>12}")
+    for suffix in ("a1", "b1", "a001", "b001", "a005", "a", "b", "c", "aa", "bb")
+)
+
+
+def seed_users(admin_url: str, user_ids: tuple[uuid.UUID, ...] = STANDARD_TEST_USERS) -> None:
+    """Insert bare ``users`` rows as the migration role (test setup only)."""
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        for user_id in user_ids:
+            conn.execute(
+                "INSERT INTO users (id, email, display_name) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                (user_id, f"user-{user_id.hex[-12:]}@test.example", "Test user"),
+            )
+
+
 @contextmanager
 def new_database(base_admin: str, *, migrate: bool) -> Iterator[TempDatabase]:
-    """A throwaway database, optionally migrated to head; dropped afterwards."""
+    """A throwaway database, optionally migrated to head (with the standard test users)."""
     name, admin_url = _create_database(base_admin)
     try:
         if migrate:
             command.upgrade(alembic_config(admin_url), "head")
+            seed_users(admin_url)
         yield temp_database(base_admin, name, admin_url)
     finally:
         _drop_database(base_admin, name)

@@ -6,6 +6,9 @@ system events). Its first statement records ``event_consumptions(event_id, handl
 concurrent transaction holding the same key makes the insert wait until it ends. The handler's
 writes and the consumption record commit together, or roll back together on any exception
 (Procrastinate then retries the job).
+
+``natural_key`` handlers (§7.4) make external calls: no wrapper transaction and no consumption
+row; the handler runs its own short transactions and is idempotent by natural keys.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ import structlog
 from sqlalchemy.dialects.postgresql import insert
 
 from eca.platform import crashpoints
-from eca.platform.events import EventEnvelope, EventRegistry, HandlerContext
+from eca.platform.events import EventEnvelope, EventRegistry, HandlerContext, Resources
 from eca.platform.outbox import event_consumptions_table
 from eca.platform.uow import UnitOfWorkFactory
 
@@ -31,6 +34,7 @@ async def run_handler(
     envelope_args: Mapping[str, Any],
     *,
     attempt: int,
+    resources: Resources | None = None,
 ) -> bool:
     """Run one handler for one event. Returns False when the event was already consumed."""
     spec = registry.handler(handler_name)
@@ -39,7 +43,22 @@ async def run_handler(
         raise ValueError(f"Handler {handler_name!r} does not handle {envelope.event_type!r}")
     payload = registry.payload_model(envelope.event_type).model_validate(envelope.payload)
 
+    resources = resources or Resources()
+
     with structlog.contextvars.bound_contextvars(event_id=str(envelope.id), handler=handler_name):
+        if spec.mode == "natural_key":
+            await spec.func(
+                HandlerContext(
+                    uow=None,
+                    envelope=envelope,
+                    payload=payload,
+                    attempt=attempt,
+                    uow_factory=uow_factory,
+                    resources=resources,
+                )
+            )
+            log.info("handler_applied", attempt=attempt, mode="natural_key")
+            return True
         async with uow_factory(user_id=envelope.user_id) as uow:
             claimed = await uow.session.execute(
                 insert(event_consumptions_table)
@@ -51,7 +70,16 @@ async def run_handler(
                 log.info("handler_duplicate_skipped", attempt=attempt)
                 return False
             crashpoints.hit("handler.after_consumption")
-            await spec.func(HandlerContext(uow=uow, envelope=envelope, payload=payload, attempt=attempt))
+            await spec.func(
+                HandlerContext(
+                    uow=uow,
+                    envelope=envelope,
+                    payload=payload,
+                    attempt=attempt,
+                    uow_factory=uow_factory,
+                    resources=resources,
+                )
+            )
             crashpoints.hit("handler.before_commit")
         crashpoints.hit("handler.after_commit")
         log.info("handler_applied", attempt=attempt)

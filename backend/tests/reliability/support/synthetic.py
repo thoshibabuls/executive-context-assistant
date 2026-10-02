@@ -50,7 +50,7 @@ def _effect(
         if sleep_s:
             await asyncio.sleep(sleep_s)
         assert isinstance(ctx.payload, SyntheticPayload)
-        await ctx.uow.session.execute(
+        await ctx.tx.session.execute(
             _INSERT_EFFECT,
             {
                 "event_id": ctx.envelope.id,

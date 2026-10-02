@@ -27,7 +27,7 @@ from procrastinate import JobContext
 from procrastinate.jobs import Job
 
 from eca.platform.errors import AuthRevoked, Gone, ValidationFailed
-from eca.platform.events import EventRegistry
+from eca.platform.events import EventRegistry, Resources
 from eca.platform.handlers import run_handler
 from eca.platform.uow import UnitOfWorkFactory
 
@@ -106,6 +106,7 @@ def register_handler_tasks(
     registry: EventRegistry,
     uow_factory: UnitOfWorkFactory,
     retry: procrastinate.BaseRetryStrategy,
+    resources: Resources | None = None,
 ) -> None:
     for spec in registry.handlers():
 
@@ -114,7 +115,12 @@ def register_handler_tasks(
                 assert context.job is not None
                 with structlog.contextvars.bound_contextvars(job_id=context.job.id):
                     await run_handler(
-                        uow_factory, registry, handler_name, envelope, attempt=context.job.attempts
+                        uow_factory,
+                        registry,
+                        handler_name,
+                        envelope,
+                        attempt=context.job.attempts,
+                        resources=resources,
                     )
 
             return handler_job
