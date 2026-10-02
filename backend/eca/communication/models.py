@@ -30,6 +30,7 @@ conversations_table = Table(
     Column("priority_reasons", JSONB),
     Column("priority_override", SmallInteger),
     Column("version", Integer, nullable=False),
+    Column("deleted_at", DateTime(timezone=True)),
 )
 
 messages_table = Table(
