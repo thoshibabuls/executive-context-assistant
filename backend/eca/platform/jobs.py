@@ -5,6 +5,8 @@
 * Infrastructure tasks on the ``schedule`` queue: ``eca.reconcile`` (every 5 min) and
   ``eca.recover_stalled_jobs`` (every minute, and once at worker start, see
   :func:`recover_stalled_jobs`).
+* Module periodic tasks declared as :class:`PeriodicTaskSpec` (e.g. ``intelligence``'s
+  ``cost_rollup``) and registered by the worker with :func:`register_periodic_tasks`.
 
 Procrastinate never takes part in a SQLAlchemy transaction; it uses its own psycopg pool,
 connected as the worker role.
@@ -15,6 +17,7 @@ from __future__ import annotations
 import datetime
 import random
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -132,6 +135,38 @@ async def recover_stalled_jobs(app: procrastinate.App, *, stalled_timeout_s: flo
         log.warning("stalled_job_recovered", job_id=job.id, task=job.task_name, attempts=job.attempts + 1)
     await app.job_manager.prune_stalled_workers(stalled_timeout_s)
     return len(stalled)
+
+
+@dataclass(frozen=True)
+class PeriodicTaskSpec:
+    """A module's periodic job (BACKEND_DESIGN.md §5.5).
+
+    ``run`` receives the worker's unit-of-work factory and the scheduled tick (UTC). The task runs
+    under a lock named after ``periodic_id``, so two ticks never overlap.
+    """
+
+    name: str
+    periodic_id: str
+    cron: str
+    queue: str
+    run: Callable[[UnitOfWorkFactory, datetime.datetime], Awaitable[None]]
+
+
+def register_periodic_tasks(
+    app: procrastinate.App, specs: Iterable[PeriodicTaskSpec], uow_factory: UnitOfWorkFactory
+) -> None:
+    for spec in specs:
+
+        def make(s: PeriodicTaskSpec) -> Callable[[int], Awaitable[None]]:
+            async def periodic_job(timestamp: int) -> None:
+                await s.run(uow_factory, datetime.datetime.fromtimestamp(timestamp, datetime.UTC))
+
+            return periodic_job
+
+        task = app.task(
+            name=spec.name, queue=spec.queue, lock=spec.periodic_id, queueing_lock=spec.periodic_id
+        )
+        app.periodic(cron=spec.cron, periodic_id=spec.periodic_id)(task(make(spec)))
 
 
 def register_infrastructure_tasks(

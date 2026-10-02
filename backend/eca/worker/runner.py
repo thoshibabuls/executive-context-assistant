@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import signal
 import sys
+from collections.abc import Sequence
 from typing import Literal
 
 import structlog
@@ -24,10 +25,12 @@ from eca.platform.db import create_engine, create_session_factory
 from eca.platform.dispatch import Dispatcher, reconcile_once
 from eca.platform.events import EventRegistry
 from eca.platform.jobs import (
+    PeriodicTaskSpec,
     create_job_app,
     recover_stalled_jobs,
     register_handler_tasks,
     register_infrastructure_tasks,
+    register_periodic_tasks,
 )
 from eca.platform.uow import UnitOfWorkFactory
 from eca.worker.config import WorkerConfig
@@ -59,6 +62,7 @@ async def run_worker(
     settings: Settings,
     mode: Mode = "all",
     stop: asyncio.Event | None = None,
+    periodic: Sequence[PeriodicTaskSpec] = (),
 ) -> None:
     """Run until ``stop`` is set or SIGINT/SIGTERM arrives."""
     crashpoints.configure(is_production=settings.is_production)
@@ -85,6 +89,7 @@ async def run_worker(
         register_infrastructure_tasks(
             job_app, reconcile=reconcile, stalled_timeout_s=config.stalled_timeout_s
         )
+        register_periodic_tasks(job_app, periodic, uow_factory)
 
         async with job_app.open_async():
             _install_signal_handlers(stop)

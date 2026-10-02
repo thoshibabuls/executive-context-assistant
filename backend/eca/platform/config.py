@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -39,8 +40,12 @@ class Settings(BaseSettings):
 
     sentry_dsn: SecretStr | None = None
 
-    # Present in .env; consumed by the AI provider layer in slice 0.4, not used yet.
+    # AI provider layer (BACKEND_DESIGN.md §5.5). The key is needed only in live or record mode.
     gemini_api_key: SecretStr | None = None
+    api_ai_mode: Literal["live", "replay", "record"] = "live"
+    api_ai_config_dir: str | None = None  # default: <repo>/config
+    api_ai_cassette_dir: str | None = None  # required in replay and record mode
+    api_ai_timeout_s: float = 60.0
 
     @property
     def cors_origins(self) -> list[str]:

@@ -1,4 +1,6 @@
-"""Exact privilege matrix after the slice 0.3 migrations (BACKEND_DESIGN.md §7.6, "What the test asserts").
+"""Exact privilege matrix after the slice 0.3 and 0.4 migrations.
+
+BACKEND_DESIGN.md §7.6, "What the test asserts".
 
 Runs on a freshly migrated database with no test tables, after upgrade and again after down/up.
 """
@@ -27,7 +29,10 @@ EXPECTED_TABLES: dict[str, dict[str, set[str]]] = {
     "outbox": {RUNTIME_ROLE: {"INSERT"}, WORKER_ROLE: set(DML)},
     "event_consumptions": {RUNTIME_ROLE: set(), WORKER_ROLE: {"SELECT", "INSERT", "DELETE"}},
     **{t: {RUNTIME_ROLE: set(), WORKER_ROLE: set(DML)} for t in PROCRASTINATE_TABLES},
+    "ai_calls": {RUNTIME_ROLE: {"INSERT"}, WORKER_ROLE: set(DML)},
+    "ai_cost_rollups": {RUNTIME_ROLE: {"SELECT"}, WORKER_ROLE: set(DML)},
 }
+RLS_TABLES = ("outbox", "event_consumptions", "ai_calls", "ai_cost_rollups")
 INFRASTRUCTURE_TABLES = set(EXPECTED_TABLES)
 
 
@@ -127,11 +132,11 @@ def _assert_matrix(admin_url: str) -> None:
         rls = {
             r[0]: (r[1], r[2])
             for r in conn.execute(
-                "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class "
-                "WHERE relname IN ('outbox', 'event_consumptions')"
+                "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = ANY(%s)",
+                (list(RLS_TABLES),),
             )
         }
-        assert rls == {"outbox": (True, True), "event_consumptions": (True, True)}
+        assert rls == {t: (True, True) for t in RLS_TABLES}
         policies = {
             (r[0], r[1], r[2], tuple(r[3]), r[4], r[5])
             for r in conn.execute(
@@ -150,6 +155,24 @@ def _assert_matrix(admin_url: str) -> None:
             ),
             ("outbox", "outbox_worker_all", "ALL", (WORKER_ROLE,), "true", "true"),
             ("event_consumptions", "event_consumptions_worker_all", "ALL", (WORKER_ROLE,), "true", "true"),
+            (
+                "ai_calls",
+                "ai_calls_api_insert",
+                "INSERT",
+                (RUNTIME_ROLE,),
+                None,
+                "(user_id = eca_current_user_id())",
+            ),
+            ("ai_calls", "ai_calls_worker_all", "ALL", (WORKER_ROLE,), "true", "true"),
+            (
+                "ai_cost_rollups",
+                "ai_cost_rollups_api_read",
+                "SELECT",
+                (RUNTIME_ROLE,),
+                "(user_id = eca_current_user_id())",
+                None,
+            ),
+            ("ai_cost_rollups", "ai_cost_rollups_worker_all", "ALL", (WORKER_ROLE,), "true", "true"),
         }
 
         # 4. role attributes and separation

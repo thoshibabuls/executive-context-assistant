@@ -1,0 +1,110 @@
+# Role registry (AI_PIPELINE.md §2-§3; loading and validation: BACKEND_DESIGN.md §5.5).
+# Code references roles only, never model IDs. Changing this file is a major change
+# (AI_PIPELINE.md §12) and passes the frozen-dataset scorecard.
+#
+# Model IDs come from Google's pages on 2026-10-02. "verified: false" until the slice 0.4 live
+# smoke test (backend/tests/live/test_gemini_smoke.py) has confirmed every ID with an API key;
+# that run also resolves Q8 (gemini-embedding-2 with or without -preview).
+# max_output_tokens are initial caps (about 3-4x the expected output incl. thinking in
+# AI_COST_MODEL.md §3), to be tuned on the frozen dataset.
+schema_version: 1
+verified: false
+
+roles:
+  email_extract:
+    inventory_id: AI-01
+    model: gemini-3.1-flash-lite
+    fallback: gemini-3.5-flash-lite
+    thinking: minimal
+    temperature: 0.0
+    max_output_tokens: 2048
+    enabled: true
+  adjudicate:
+    inventory_id: AI-02
+    model: gemini-3.8-flash
+    fallback: gemini-3.5-flash
+    thinking: medium
+    temperature: 0.0
+    max_output_tokens: 4096
+    enabled: false  # disabled until experiment X1 shows lift
+  thread_summary:
+    inventory_id: AI-03
+    model: gemini-3.1-flash-lite
+    fallback: gemini-3.5-flash-lite
+    thinking: minimal
+    temperature: 0.0
+    max_output_tokens: 1024
+    enabled: true
+  embed:
+    inventory_id: AI-04
+    model: gemini-embedding-2
+    fallback: null
+    thinking: null
+    temperature: null
+    max_output_tokens: null
+    output_dimensionality: 768
+    enabled: true
+  plan_query:
+    inventory_id: AI-05
+    model: gemini-3.1-flash-lite
+    fallback: gemini-3.5-flash-lite
+    thinking: minimal
+    temperature: 0.0
+    max_output_tokens: 1024
+    enabled: true
+  answer_lookup:
+    inventory_id: AI-06
+    model: gemini-3.1-flash-lite
+    fallback: gemini-3.5-flash-lite
+    thinking: low
+    temperature: 0.0
+    max_output_tokens: 2048
+    enabled: true
+  answer_synthesis:
+    inventory_id: AI-07
+    model: gemini-3.8-flash
+    fallback: gemini-3.5-flash
+    thinking: low
+    temperature: 0.0
+    max_output_tokens: 4096
+    enabled: true
+  reply_guidance:
+    inventory_id: AI-08
+    model: gemini-3.8-flash
+    fallback: gemini-3.5-flash
+    thinking: low
+    temperature: 0.3
+    max_output_tokens: 4096
+    enabled: true
+  transcribe:
+    inventory_id: AI-09
+    model: gemini-3.5-transcribe
+    fallback: gemini-3.1-flash-lite
+    thinking: null
+    temperature: 0.0
+    max_output_tokens: 65536
+    enabled: true
+  meeting_extract:
+    inventory_id: AI-10
+    model: gemini-3.8-flash
+    fallback: gemini-3.5-flash
+    thinking: medium
+    temperature: 0.0
+    max_output_tokens: 16384
+    enabled: true
+  meeting_asks:
+    inventory_id: AI-11
+    model: gemini-3.8-flash
+    fallback: gemini-3.5-flash
+    thinking: low
+    temperature: 0.0
+    max_output_tokens: 2048
+    enabled: true
+  judge:
+    inventory_id: AI-14
+    model: gemini-3.1-pro-preview
+    fallback: gemini-3.8-flash
+    thinking: high
+    temperature: 0.0
+    max_output_tokens: 4096
+    enabled: true  # offline evaluation only

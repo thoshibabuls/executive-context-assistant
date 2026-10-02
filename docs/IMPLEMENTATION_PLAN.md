@@ -8,13 +8,15 @@
 
 ## 0. Implementation status
 
-Last updated 2026-10-02 (slice 0.3 locally verified; CI has not run on it).
+Last updated 2026-10-02 (slice 0.3 locally verified; slices 0.4 and 0.5 implemented, local results in §0.4; CI has not run on them).
 
 | Slice | Code | Verification |
 |---|---|---|
 | 0.1 Repository hygiene | Implemented (commit `5b71b09`) | `.env` git-ignored and untracked (unit tests pass, locally and in CI). gitleaks pre-commit hook over all files: passed locally. **Git-history scan (CI `secrets` job): not performed.** The job fails in its install step before scanning (§0.1). Gemini key rotation: not verifiable from the repository (owner action) |
 | 0.2 Backend skeleton | Implemented (commit `5b71b09`) | **RT-15 passes** on PostgreSQL in CI. **"CI green" is not met**: the lint and test jobs pass, but the overall run is red because of the `secrets` job (§0.1) |
 | 0.3 Reliability core | Implemented (commit `c5d7c0e`, "Slice 0.3: reliable event infrastructure") | **Locally verified**: exit criteria 1–4 met locally (§0.3), including 100 consecutive RT-01 + RT-05 runs. **Not "complete"**: CI has not run on this commit, and the `secrets` job bug (§0.1) keeps any run red |
+| 0.4 AI provider layer | Implemented (commit "Slice 0.4: AI provider layer") | Local gates pass (§0.4). **Exit not met**: the live smoke test has not run (no `GEMINI_API_KEY` in the build environment; it needs one run with a restricted key provided as an environment secret). Cassette replay determinism: met (tested) |
+| 0.5 Evaluation harness | Implemented (commit `95c06e4`) | Local gates pass (§0.4). Runner end to end on stubs: met. **Freeze of `golden-v0.1`: not done**: labels are draft and need the labelling owner's review (Q12); a candidate manifest (`frozen: false`) is committed |
 
 ### 0.1 CI evidence (GitHub Actions)
 
@@ -42,6 +44,23 @@ Environment: Python 3.11; PostgreSQL 17.11 with pgvector 0.8.7 in Docker (`pgvec
 | 5. This section updated with measured results | Done |
 
 CI: not run on this commit. Pushes to a non-`main` branch do not trigger the workflow, and the `secrets` job bug (§0.1) still keeps any run red. Slice 0.3 is "locally verified"; it becomes "complete" only with a green CI run.
+
+### 0.4 Slices 0.4 and 0.5 local results (2026-10-02, Linux cloud session)
+
+Same environment as §0.3 (`CI=true`, so a skipped database test is a failure).
+
+| Gate | Result |
+|---|---|
+| ruff check, ruff format --check | Pass (116 files) |
+| mypy strict (`eca`, `eca_evals`) | Pass (77 source files) |
+| lint-imports | 5 contracts kept: module boundaries (now also applied to `eca_evals` as a client package), connectors, platform base layer, **only `eca.intelligence` imports `google.genai`**, `eca` never imports `eca_evals`. Both new contracts were shown to break on a probe import |
+| pre-commit (all files, incl. gitleaks) | Pass |
+| pytest (full suite) | **292 passed, 0 skipped, 1 deselected** (the `live` smoke test, deselected by default); 109 PostgreSQL tests. New: 34 provider tests (registry, pricing, cassettes, attempt policy, client), 26 Gemini-wrapper and provenance tests, 5 client-configuration tests, 13 PostgreSQL telemetry tests (meter per role, RLS and grants, own-transaction meter, roll-up grouping, idempotency and window, unique bucket with NULL user, API reads its own roll-ups only, periodic task registration), 47 evaluation-harness tests, 2 contract tests; migration chain and privilege matrix extended to `0005` (up/down/up) |
+| Live smoke test (`pytest -m live tests/live`) | **Not run**: skipped, no `GEMINI_API_KEY` in this environment. `config/models.yaml` stays `verified: false` |
+| Gate A0 (`python -m eca_evals gate-a0`) | Pass: manifest, dataset, splits and contamination pass; cassette suites and E14 are n/a until slice 1.4 |
+| Stub runs (10,000 resamples) | AI suite (test + challenge, 72 cases): the candidate stub fixes the baseline's forwarded-promise attribution (safety 4 → 0); statement precision +0.108 (CI +0.024 to +0.222), recall +0.167 (CI +0.067 to +0.273); decision `incomplete` (no human review). Context L2 (10 chains, 13 checkpoints): oracle stub state accuracy 1.000, naive stub 0.000; decision `incomplete`. These runs validate the harness, not product quality |
+
+Dataset: `world_v1` email slice, 150 emails, 136 threads, 85 statements; splits 55 dev / 65 test / 23 sealed / 7 challenge (thread level); chains 4 dev / 5 test / 1 sealed. Labels are draft (template-generated, no human review). CI: not run on these commits yet (§0.1).
 
 ### 0.2 Local environments (history; CI above is the reference evidence)
 

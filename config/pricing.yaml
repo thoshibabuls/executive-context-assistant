@@ -1,0 +1,24 @@
+# Gemini API paid-tier prices (AI_COST_MODEL.md §2; Google pricing page, 2026-10-02).
+# Per 1 M tokens unless the unit says otherwise. effective_from inclusive, effective_to
+# exclusive (UTC dates). Cached input tokens are charged at the full input price: no cache
+# discount is assumed (AI_COST_MODEL.md §1, principle 4). Thinking tokens are billed as output.
+schema_version: 1
+currency: USD
+source: "Google Gemini API pricing page (paid tier), observed 2026-10-02"
+
+models:
+  gemini-3.1-flash-lite:
+    - {effective_from: 2026-10-02, input_per_mtok: "0.25", audio_input_per_mtok: "0.50", output_per_mtok: "1.50"}
+  gemini-3.5-flash-lite:
+    - {effective_from: 2026-10-02, input_per_mtok: "0.30", output_per_mtok: "2.50"}
+  gemini-3.8-flash:
+    - {effective_from: 2026-10-02, effective_to: 2027-01-01, input_per_mtok: "0.75", output_per_mtok: "3.75", note: "promotional"}
+    - {effective_from: 2027-01-01, input_per_mtok: "1.50", output_per_mtok: "7.50"}
+  gemini-3.5-flash:
+    - {effective_from: 2026-10-02, input_per_mtok: "1.50", output_per_mtok: "9.00"}
+  gemini-3.1-pro-preview:
+    - {effective_from: 2026-10-02, input_per_mtok: "2.00", output_per_mtok: "12.00"}
+  gemini-3.5-transcribe:
+    - {effective_from: 2026-10-02, audio_input_per_minute: "0.003", audio_output_per_minute: "0.002"}
+  gemini-embedding-2:
+    - {effective_from: 2026-10-02, input_per_mtok: "0.20"}

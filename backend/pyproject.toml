@@ -19,6 +19,8 @@ dependencies = [
     "sentry-sdk>=2.0",
     # Pinned exactly: migration 0004 vendors this version's schema (BACKEND_DESIGN.md §7.7, §15).
     "procrastinate==3.10.0",
+    # Gemini SDK, imported only by eca.intelligence (import-linter contract).
+    "google-genai>=2.27,<3",
     "pyyaml>=6.0",
 ]
 
@@ -79,8 +81,9 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 markers = [
     "db: requires a PostgreSQL database with pgvector (ECA_TEST_DATABASE_URL)",
+    "live: calls the real Gemini API; deselected by default, never in CI (pytest -m live)",
 ]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not live'"
 filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
 
 # ---------------------------------------------------------------- import-linter
