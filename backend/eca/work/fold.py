@@ -30,6 +30,7 @@ FOLDED_FIELDS = (
     "owner_person_id",
     "counterparty_person_id",
     "requester_person_id",
+    "project_id",
     "project_hint",
     "due_at",
     "due_precision",

@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from eca.retrieval.feed import what_changed, yesterday
 from eca.retrieval.retrievers import RETRIEVERS, Retriever
+from eca.retrieval.topics import project_or_topic
 
 
 def all_retrievers() -> dict[str, Retriever]:
-    return {**RETRIEVERS, "what_changed": what_changed, "day_view": yesterday}
+    return {**RETRIEVERS, "what_changed": what_changed, "day_view": yesterday, "project": project_or_topic}

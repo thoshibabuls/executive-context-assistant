@@ -245,11 +245,25 @@ async def change_feed(
     """``GET /api/v1/changes`` (BACKEND_DESIGN.md §16.7)."""
     identity.check_surface(scope)
     person_ids: list[UUID] = []
+    project_scope: tuple[set[UUID], set[UUID]] | None = None
     if scope.startswith("person:"):
         person_ids = await people.merged_ids(uow, UUID(scope.split(":", 1)[1]))
+    elif scope.startswith("project:"):
+        from eca.retrieval.topics import project_item_ids
+
+        project_scope = await project_item_ids(uow, UUID(scope.split(":", 1)[1]))
     explicit = TimeWindow(since, now, "since the given time", "explicit") if since is not None else None
     window = await change_anchor(uow, now=now, surfaces=(scope,), explicit=explicit)
     cs = await changes_since(uow, anchor=window.start, now=now, person_ids=person_ids)
+    if project_scope is not None:
+        item_ids, decision_ids = project_scope
+        kept = [
+            c
+            for c in cs.changes
+            if (c.entity_type == "work_item" and c.entity_id in item_ids)
+            or (c.entity_type == "decision" and c.entity_id in decision_ids)
+        ]
+        cs = replace(cs, changes=kept)
     coverage, tz, self_id = await _coverage(uow, now, window)
     persons = await _persons_for(uow, cs)
     cards_by_key = {c.key: c for c in change_cards(cs, tz, now, persons, self_id, limit=None)}

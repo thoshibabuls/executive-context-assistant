@@ -1,4 +1,4 @@
-"""Tables owned by ``work`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0008 and 0012."""
+"""Tables owned by ``work`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0008, 0012 and 0015."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ work_items_table = Table(
     Column("owner_person_id", _U),
     Column("counterparty_person_id", _U),
     Column("requester_person_id", _U),
+    Column("project_id", _U),
     Column("project_hint", Text),
     Column("due_at", _TS),
     Column("due_precision", Text),

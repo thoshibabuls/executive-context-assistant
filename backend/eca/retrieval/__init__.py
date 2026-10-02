@@ -5,7 +5,14 @@ through their public APIs (§5.2). Other modules import only from this package r
 """
 
 from eca.retrieval import tasks as _tasks  # registers the index handlers
-from eca.retrieval.assembly import Assembly, assemble, embed_question, needs_discovery, plan_window
+from eca.retrieval.assembly import (
+    Assembly,
+    assemble,
+    context_for,
+    embed_question,
+    needs_discovery,
+    plan_window,
+)
 from eca.retrieval.cards import delimit, fmt_date
 from eca.retrieval.changes import ChangeSet, DayView, NetChange, changes_since, day_view, item_net_change
 from eca.retrieval.chunking import ChunkDraft, calendar_chunks, email_chunks, estimate_tokens, split_text
@@ -41,6 +48,14 @@ from eca.retrieval.registry import all_retrievers
 from eca.retrieval.search import ChunkHit, SearchFilters, hybrid_search, ts_terms
 from eca.retrieval.tasks import INDEX_MEETING_HANDLER, INDEX_MESSAGE_HANDLER, INDEX_REMOVED_HANDLER
 from eca.retrieval.temporal import TimeWindow
+from eca.retrieval.topics import (
+    TOPIC_LABEL,
+    ProjectContextPage,
+    TopicGroup,
+    project_context_for,
+    topic_groups,
+    topic_mode,
+)
 from eca.retrieval.traces import purge_old_traces
 
 del _tasks
@@ -54,6 +69,7 @@ __all__ = [
     "INTENT_SCENARIO",
     "INTENT_TIER",
     "LIST_INTENTS",
+    "TOPIC_LABEL",
     "AliasHit",
     "AliasMatcher",
     "AliasTarget",
@@ -75,18 +91,21 @@ __all__ = [
     "Packet",
     "PacketItem",
     "Plan",
+    "ProjectContextPage",
     "ReembedReport",
     "SearchFilters",
     "SessionScope",
     "SessionState",
     "SourceCoverage",
     "TimeWindow",
+    "TopicGroup",
     "Turn",
     "all_retrievers",
     "assemble",
     "calendar_chunks",
     "change_feed",
     "changes_since",
+    "context_for",
     "coverage_sentence",
     "day_view",
     "day_view_for",
@@ -102,6 +121,7 @@ __all__ = [
     "message_target",
     "needs_discovery",
     "plan_window",
+    "project_context_for",
     "purge_old_traces",
     "purge_sources",
     "purge_unretained",
@@ -109,5 +129,7 @@ __all__ = [
     "reembed_stale",
     "remove_source",
     "split_text",
+    "topic_groups",
+    "topic_mode",
     "ts_terms",
 ]

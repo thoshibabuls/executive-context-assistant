@@ -100,6 +100,7 @@ class WorkItemView:
     last_activity_at: datetime.datetime | None = None
     stale: bool = False
     created_at: datetime.datetime | None = None
+    project_id: UUID | None = None
 
 
 def model_dedupe_key(extraction_id: UUID, index: int, event_type: str) -> bytes:
@@ -132,7 +133,13 @@ def _jsonable(fields: dict[str, Any]) -> dict[str, Any]:
 
 
 _UUID_FIELDS = frozenset(
-    {"owner_person_id", "counterparty_person_id", "requester_person_id", "reported_status_evidence_id"}
+    {
+        "owner_person_id",
+        "counterparty_person_id",
+        "requester_person_id",
+        "reported_status_evidence_id",
+        "project_id",
+    }
 )
 _TS_FIELDS = frozenset({"due_at", "reported_status_at"})
 
@@ -483,6 +490,63 @@ async def add_note(
     )
 
 
+async def assign_project(
+    uow: UnitOfWork, item_id: UUID, project_id: UUID | None, *, request_key: str, at: datetime.datetime
+) -> AppendResult:
+    """User assigns (or clears) an item's project (authority 5; BACKEND_DESIGN.md §9.9)."""
+    return await _user_event(
+        uow,
+        item_id,
+        "user_project",
+        {"project_id": project_id},
+        request_key=request_key,
+        at=at,
+        materiality=1,
+    )
+
+
+async def record_entity_event(
+    uow: UnitOfWork,
+    *,
+    entity_type: str,
+    entity_id: UUID,
+    event_type: str,
+    actor: str,
+    authority: int,
+    materiality: int,
+    occurred_at: datetime.datetime,
+    dedupe_key: bytes,
+    payload: dict[str, Any] | None = None,
+) -> bool:
+    """A ``context_events`` row for an entity without a fold (projects, decisions): the change
+    feed and timelines see it; ``work`` stays the single writer (BACKEND_DESIGN.md §6.2)."""
+    if entity_type == "work_item":
+        raise ValidationFailed("work item events go through append_event")
+    if actor == "user" and authority != 5:
+        raise ValueError("user events carry authority 5")
+    inserted = (
+        await uow.session.execute(
+            insert(context_events_table)
+            .values(
+                id=uuid7(),
+                user_id=uow.user_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                event_type=event_type,
+                payload=payload or {},
+                actor=actor,
+                authority=authority,
+                materiality=materiality,
+                dedupe_key=dedupe_key,
+                occurred_at=occurred_at,
+            )
+            .on_conflict_do_nothing(index_elements=["user_id", "dedupe_key"])
+            .returning(context_events_table.c.id)
+        )
+    ).scalar_one_or_none()
+    return inserted is not None
+
+
 async def create_user_item(
     uow: UnitOfWork,
     *,
@@ -561,6 +625,7 @@ def _view(row: Any, sources: tuple[UUID, ...] = ()) -> WorkItemView:
         last_activity_at=getattr(row, "last_activity_at", None),
         stale=bool(getattr(row, "stale", False)),
         created_at=getattr(row, "created_at", None),
+        project_id=getattr(row, "project_id", None),
     )
 
 

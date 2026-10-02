@@ -17,6 +17,7 @@ import eca.ingestion
 import eca.intelligence
 import eca.meetings
 import eca.privacy
+import eca.projects
 import eca.retrieval
 import eca.work
 from eca.platform.clock import Clock, SystemClock
@@ -82,5 +83,6 @@ def production_periodic_tasks() -> list[PeriodicTaskSpec]:
         *eca.ingestion.periodic_tasks(),
         *eca.attention.periodic_tasks(),
         *eca.work.periodic_tasks(),
+        *eca.projects.periodic_tasks(),
         *eca.privacy.periodic_tasks(),
     ]

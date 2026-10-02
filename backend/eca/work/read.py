@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, func, literal_column, or_, select
+from sqlalchemy import Select, Text, func, literal, literal_column, or_, select
+from sqlalchemy.dialects.postgresql import ARRAY
 
 from eca.platform.uow import UnitOfWork
 from eca.work.models import (
@@ -314,3 +315,110 @@ async def events_occurred_between(
         .limit(limit)
     )
     return [_event(r) for r in rows]
+
+
+# --- projects (slice 2.5): hint matching with pg_trgm ------------------------------------------
+
+HINT_MIN_SIMILARITY = 0.45
+
+
+def _hint_match(column: Any, names: Sequence[str]) -> Any:
+    """``column`` is trigram-similar (≥ 0.45) to any of ``names`` (lower-cased project name/aliases)."""
+    n = func.unnest(literal(list(names), ARRAY(Text))).table_valued("n").alias("names")
+    return (
+        select(literal_column("1"))
+        .select_from(n)
+        .where(func.similarity(func.lower(column), n.c.n) >= HINT_MIN_SIMILARITY)
+        .exists()
+    )
+
+
+async def items_for_project(
+    uow: UnitOfWork,
+    *,
+    project_id: UUID,
+    names: Sequence[str],
+    include_closed: bool = False,
+    limit: int = 50,
+) -> list[WorkItemView]:
+    """Items assigned to the project, or whose ``project_hint`` matches its name or aliases."""
+    t = work_items_table
+    lowered = [n.lower() for n in names if n]
+    cond = t.c.project_id == project_id
+    if lowered:
+        cond = or_(
+            cond,
+            (t.c.project_id.is_(None))
+            & t.c.project_hint.is_not(None)
+            & _hint_match(t.c.project_hint, lowered),
+        )
+    stmt = _live_items(uow).where(cond, ~t.c.archived)
+    if not include_closed:
+        stmt = stmt.where(t.c.lifecycle_status.in_(OPEN_STATES))
+    rows = (
+        await uow.session.execute(
+            stmt.order_by(t.c.last_activity_at.desc().nulls_last(), t.c.id).limit(limit)
+        )
+    ).all()
+    sources = await _sources_by_item(uow, [r.id for r in rows])
+    return [_view(r, sources.get(r.id, ())) for r in rows]
+
+
+async def decisions_for_hints(
+    uow: UnitOfWork, names: Sequence[str], *, limit: int = 20
+) -> list[DecisionView]:
+    lowered = [n.lower() for n in names if n]
+    if not lowered:
+        return []
+    d = decisions_table
+    rows = (
+        await uow.session.execute(
+            _live_decisions(uow)
+            .where(d.c.project_hint.is_not(None), _hint_match(d.c.project_hint, lowered))
+            .order_by(d.c.created_at.desc(), d.c.id)
+            .limit(limit)
+        )
+    ).all()
+    return [decision_view(r) for r in rows]
+
+
+@dataclass(frozen=True)
+class HintSource:
+    hint: str
+    source_item_id: UUID
+    person_ids: tuple[UUID, ...]
+
+
+async def project_hint_sources(uow: UnitOfWork) -> list[HintSource]:
+    """(hint, source) pairs of live items and decisions, for project suggestions (§12.5)."""
+    t, d, ie, ev = work_items_table, decisions_table, item_evidence_table, evidence_table
+    out: list[HintSource] = []
+    item_rows = await uow.session.execute(
+        select(t.c.project_hint, ev.c.source_item_id, t.c.owner_person_id, t.c.counterparty_person_id)
+        .join(ie, (ie.c.item_type == "work_item") & (ie.c.item_id == t.c.id))
+        .join(ev, ev.c.id == ie.c.evidence_id)
+        .where(
+            t.c.user_id == uow.user_id,
+            t.c.project_hint.is_not(None),
+            t.c.verification_status != "rejected",
+            t.c.merged_into_id.is_(None),
+            t.c.deleted_at.is_(None),
+        )
+    )
+    for r in item_rows:
+        persons = tuple(p for p in (r.owner_person_id, r.counterparty_person_id) if p is not None)
+        out.append(HintSource(r.project_hint, r.source_item_id, persons))
+    decision_rows = await uow.session.execute(
+        select(d.c.project_hint, ev.c.source_item_id)
+        .join(ie, (ie.c.item_type == "decision") & (ie.c.item_id == d.c.id))
+        .join(ev, ev.c.id == ie.c.evidence_id)
+        .where(
+            d.c.user_id == uow.user_id,
+            d.c.project_hint.is_not(None),
+            d.c.verification_status != "rejected",
+            d.c.deleted_at.is_(None),
+        )
+    )
+    for dr in decision_rows:
+        out.append(HintSource(dr.project_hint, dr.source_item_id, ()))
+    return out

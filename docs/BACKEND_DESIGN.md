@@ -125,8 +125,9 @@ retrieval → work · people · projects · meetings · communication · ingesti
                                                                through work.link_entities and alias mentions through
                                                                people.replace_alias_mentions — the single writers stay
                                                                work and people)
-projects → work · people                                      (Phase 2: hint matching reads items and decisions; item
-                                                               assignment and context events through work's services)
+projects → work · people · identity                           (Phase 2: hint matching reads items and decisions; item
+                                                               assignment and context events through work's services;
+                                                               the nightly suggestion job lists users through identity)
 attention → work · communication · meetings · people · identity   (writes priority via their services; user list and timezone)
 privacy → identity · connections · ingestion · communication · meetings · people · work · intelligence
           · retrieval · projects · chat                       (deletion and retention jobs call each module's purge functions;
@@ -1399,8 +1400,8 @@ One revision per concern; every table below gets ENABLE + FORCE RLS through `use
 | `0012_entity_links` | 2.1 | `entity_links` |
 | `0013_retrieval_traces` | 2.2 | `retrieval_traces` |
 | `0014_user_checkpoints` | 2.3 | `user_checkpoints` |
-| `0015_projects` | 2.5 | `projects`, `project_members`; expand: nullable `work_items.project_id` and `decisions.project_id` with FKs to `projects` |
-| `0016_project_indexes` | 2.5 | `ix_wi_project`, `ix_decisions_project`, `ix_decisions_hint_trgm`, created `CONCURRENTLY` (existing tables) outside the revision transaction |
+| `0015_projects` | 2.5 | `projects`, `project_members`; expand: nullable `work_items.project_id` with its FK to `projects` |
+| `0016_project_indexes` | 2.5 | `ix_wi_project`, `ix_decisions_hint_trgm`, created `CONCURRENTLY` (existing tables) in Alembic's autocommit block |
 | `0017_chat` | 2.4 | `chat_sessions`, `chat_messages` |
 
 ```sql
@@ -1492,7 +1493,7 @@ CREATE INDEX ix_chat_messages_session ON chat_messages (session_id, created_at, 
 CREATE INDEX ix_chat_sessions_user ON chat_sessions (user_id, last_active_at DESC, id);
 ```
 
-Not built in Phase 2: `chunks.project_id` (TECHNICAL_DESIGN.md §9.1) — project retrieval reaches chunks through the project's linked items, decisions and conversations, so the column would stay empty; `chat_sessions.session_summary` (AI-13 retired).
+Not built in Phase 2: `chunks.project_id` (TECHNICAL_DESIGN.md §9.1) — project retrieval reaches chunks through the project's linked items, decisions and conversations, so the column would stay empty; `decisions.project_id` — no action assigns a decision to a project yet, so decisions link to projects through `project_hint` matching only; `chat_sessions.session_summary` (AI-13 retired).
 
 Deletion order additions (§13.3): account deletion runs `chat` → `retrieval` (chunks, traces) → `work` (now also `entity_links`) → … → `projects` (members, projects; after `work`, whose rows reference them) → `people` …; `identity.purge_sessions` also removes `user_checkpoints`. Source purge deletes the batch's chunks first (they reference source items, conversations and meetings) and the `continues` links of purged conversations. Provider deletion of one message deletes its chunks (`retrieval.index_removed`). Retention deletes the chunks of messages whose body was purged, and `retrieval_traces` older than 90 days.
 

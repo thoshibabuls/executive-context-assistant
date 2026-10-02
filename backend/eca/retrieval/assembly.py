@@ -135,19 +135,16 @@ def _cut(text: str, tokens: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-async def assemble(
+async def context_for(
     uow: UnitOfWork,
     *,
     plan: Plan,
-    question: str,
     session: SessionState,
     now: datetime.datetime,
     query_vector: str | None = None,
     embedding_model: str | None = None,
-    surface: str = "chat",
-    retrievers: dict[str, Retriever] | None = None,
-) -> Assembly:
-    started = time.monotonic()
+) -> tuple[Ctx, list[connections.SyncState], identity.UserSettings]:
+    """The retriever context: user, timezone, scope filters (§9.7) and the plan's window."""
     settings = await identity.get_user_settings(uow)
     tz = temporal.zone(settings.timezone)
     self_p = await people.get_self_person(uow)
@@ -169,8 +166,30 @@ async def assemble(
         query_vector=query_vector,
         embedding_model=embedding_model,
     )
+    ctx.persons[self_p.id] = self_p
     if window is not None and window.note:
         ctx.notes.append(window.note)
+    return ctx, states, settings
+
+
+async def assemble(
+    uow: UnitOfWork,
+    *,
+    plan: Plan,
+    question: str,
+    session: SessionState,
+    now: datetime.datetime,
+    query_vector: str | None = None,
+    embedding_model: str | None = None,
+    surface: str = "chat",
+    retrievers: dict[str, Retriever] | None = None,
+) -> Assembly:
+    started = time.monotonic()
+    ctx, states, settings = await context_for(
+        uow, plan=plan, session=session, now=now, query_vector=query_vector, embedding_model=embedding_model
+    )
+    tz, window = ctx.tz, ctx.window
+    self_p = ctx.persons[ctx.self_id]
     table = retrievers or all_retrievers()
     retriever = table.get(plan.intent, table["unsupported"])
     got = await retriever(ctx)

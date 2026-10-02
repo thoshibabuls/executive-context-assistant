@@ -16,6 +16,7 @@ from eca.api.context import router as context_router
 from eca.api.health import router as health_router
 from eca.api.middleware import RequestIdMiddleware
 from eca.api.problems import install_problem_handlers
+from eca.api.projects import router as projects_router
 from eca.api.work import router as work_router
 from eca.identity import JwksCache
 from eca.platform.config import Settings, get_settings
@@ -88,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(work_router)
     app.include_router(context_router)
     app.include_router(assistant_router)
+    app.include_router(projects_router)
     return app
 
 

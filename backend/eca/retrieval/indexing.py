@@ -26,7 +26,7 @@ import structlog
 from sqlalchemy import select, text
 from sqlalchemy.exc import NoResultFound
 
-from eca import communication, ingestion, intelligence, meetings, people, work
+from eca import communication, ingestion, intelligence, meetings, people, projects, work
 from eca.intelligence import AIClient, BudgetLevel, EmbeddingUnavailable
 from eca.platform.ids import uuid7
 from eca.platform.uow import UnitOfWork, UnitOfWorkFactory
@@ -38,6 +38,7 @@ log = structlog.get_logger("eca.retrieval.indexing")
 
 EMBED_CALL_CAP = 4  # AI_PIPELINE.md §7: model calls per key, here per source version
 PERSON_ALIAS_CONFIDENCE = 0.9
+PROJECT_ALIAS_CONFIDENCE = 0.8
 CONTINUATION_WINDOW = datetime.timedelta(days=30)
 CONTINUATION_MIN_OVERLAP = 0.5
 CONTINUATION_MIN_SUBJECT = 0.5
@@ -195,11 +196,16 @@ def _model(client: AIClient) -> str | None:
 
 
 async def alias_targets(uow: UnitOfWork) -> list[AliasTarget]:
-    """Person aliases of the user (§12.7); confirmed project names are added in slice 2.5."""
-    return [
+    """Person aliases and confirmed project names and aliases of the user (§12.7)."""
+    targets = [
         AliasTarget("person", a.person_id, a.alias, PERSON_ALIAS_CONFIDENCE)
         for a in await people.alias_catalog(uow)
     ]
+    targets += [
+        AliasTarget("project", project_id, alias, PROJECT_ALIAS_CONFIDENCE)
+        for project_id, alias in await projects.alias_catalog(uow)
+    ]
+    return targets
 
 
 async def _write(

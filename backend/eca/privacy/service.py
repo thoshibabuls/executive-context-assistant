@@ -38,6 +38,7 @@ from eca import (
     intelligence,
     meetings,
     people,
+    projects,
     retrieval,
     work,
 )
@@ -113,6 +114,7 @@ _ACCOUNT_STEPS: tuple[tuple[str, Step], ...] = (
     ("communication", communication.purge_user),
     ("meetings", meetings.purge_user),
     ("intelligence", intelligence.purge_user),
+    ("projects", projects.purge_user),  # after work (items reference projects), before people (members)
     ("people", people.purge_user),
     ("ingestion", ingestion.purge_user),
     ("connections", connections.purge_user),
@@ -333,6 +335,7 @@ _DATA_COUNTS = {
     "ai_extractions": "SELECT count(*) FROM extractions",
     "source_items": "SELECT count(*) FROM source_items WHERE deleted_at IS NULL",
     "search_index_chunks": "SELECT count(*) FROM chunks",
+    "projects": "SELECT count(*) FROM projects WHERE deleted_at IS NULL",
 }
 
 
