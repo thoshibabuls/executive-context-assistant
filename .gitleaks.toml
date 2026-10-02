@@ -1,0 +1,12 @@
+# Gitleaks configuration for the Executive Context Assistant.
+# Uses the default ruleset (Google API keys, OAuth client secrets, private keys, generic secrets).
+title = "eca gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documentation placeholders and example files"
+paths = [
+  '''\.env\.example$''',
+]

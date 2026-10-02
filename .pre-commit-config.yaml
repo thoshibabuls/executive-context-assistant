@@ -1,0 +1,48 @@
+# Pre-commit hooks (IMPLEMENTATION_PLAN.md slice 0.1): ruff (lint + format), mypy (strict on eca),
+# import boundaries, and gitleaks secret scanning of staged changes.
+# Install: .venv/Scripts/pre-commit install   (or .venv/bin/pre-commit install)
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        exclude: ^docs/
+
+  - repo: local
+    hooks:
+      # Run inside backend/ so project root, first-party detection and per-file ignores match CI.
+      - id: ruff-check
+        name: ruff check
+        entry: bash -c 'cd backend && ruff check --fix .'
+        language: system
+        pass_filenames: false
+        files: ^backend/
+      - id: ruff-format
+        name: ruff format
+        entry: bash -c 'cd backend && ruff format .'
+        language: system
+        pass_filenames: false
+        files: ^backend/
+      - id: mypy
+        name: mypy (strict, eca)
+        entry: bash -c 'cd backend && mypy'
+        language: system
+        pass_filenames: false
+        files: ^backend/
+      - id: import-linter
+        name: import boundaries
+        entry: bash -c 'cd backend && lint-imports'
+        language: system
+        pass_filenames: false
+        files: ^backend/

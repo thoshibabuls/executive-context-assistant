@@ -1,0 +1,84 @@
+"""FastAPI application factory. Run with ``uvicorn eca.api.app:app``."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+from eca.api.health import router as health_router
+from eca.api.middleware import RequestIdMiddleware
+from eca.api.problems import install_problem_handlers
+from eca.platform.config import Settings, get_settings
+from eca.platform.db import create_engine, create_session_factory
+from eca.platform.health import migration_head
+from eca.platform.logging import configure_logging
+from eca.platform.runtime import ensure_selector_event_loop_policy
+from eca.platform.uow import UnitOfWorkFactory
+
+ensure_selector_event_loop_policy()
+
+
+def _init_sentry(settings: Settings) -> None:
+    if settings.sentry_dsn is None or not settings.sentry_dsn.get_secret_value():
+        return
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn.get_secret_value(),
+        environment=settings.api_env,
+        send_default_pii=False,
+        max_request_body_size="never",
+    )
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
+    configure_logging(settings.api_log_level)
+    _init_sentry(settings)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        url = settings.api_database_url.get_secret_value() if settings.api_database_url else None
+        engine = create_engine(url) if url else None
+        app.state.engine = engine
+        app.state.uow_factory = UnitOfWorkFactory(create_session_factory(engine)) if engine else None
+        app.state.migration_head = migration_head()
+        try:
+            yield
+        finally:
+            if engine is not None:
+                await engine.dispose()
+
+    app = FastAPI(
+        title="Executive Context Assistant API",
+        version="0.0.1",
+        lifespan=lifespan,
+        docs_url=None if settings.is_production else "/docs",
+        redoc_url=None,
+    )
+    install_problem_handlers(app)
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
+            allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key", "If-Match", "X-Request-Id"],
+        )
+    app.add_middleware(RequestIdMiddleware)
+    app.include_router(health_router)
+    return app
+
+
+def get_uow_factory(request: Request) -> UnitOfWorkFactory:
+    """Dependency for routers (slice 1.1+). Raises if the database is not configured."""
+    factory = request.app.state.uow_factory
+    if not isinstance(factory, UnitOfWorkFactory):
+        raise RuntimeError("Database is not configured")
+    return factory
+
+
+app = create_app()

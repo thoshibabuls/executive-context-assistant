@@ -1,0 +1,118 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eca"
+version = "0.0.1"
+description = "Executive Context Assistant backend (modular monolith)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.13",
+    "structlog>=24.1",
+    "sentry-sdk>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "import-linter>=2.1",
+    "pre-commit>=3.7",
+    "check-jsonschema>=0.29",
+]
+
+[tool.setuptools.packages.find]
+include = ["eca*"]
+
+# ---------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF", "N", "SIM", "TID"]
+ignore = [
+    "S101",  # assert is fine in tests
+    "N818",  # domain error names are fixed by BACKEND_DESIGN.md §14.1 (NotFound, Conflict, ...)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "N802"]
+"migrations/**" = ["S608"]
+# DDL built from identifiers validated by _identifier(); no external input reaches this SQL.
+"eca/platform/rls.py" = ["S608"]
+
+# ---------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["eca"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["importlinter.*", "grimp.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = [
+    "db: requires a PostgreSQL database with pgvector (ECA_TEST_DATABASE_URL)",
+]
+addopts = "-ra --strict-markers"
+filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
+
+# ---------------------------------------------------------------- import-linter
+# Module boundaries from BACKEND_DESIGN.md §5.3.
+[tool.importlinter]
+root_package = "eca"
+include_external_packages = true
+contract_types = [
+    "eca_boundaries: eca_devtools.import_contracts.ModuleBoundaryContract",
+]
+
+[[tool.importlinter.contracts]]
+name = "Module boundaries: public APIs, layer order, no HTTP in core"
+type = "eca_boundaries"
+domain_modules = [
+    "eca.identity", "eca.connections", "eca.ingestion", "eca.connectors", "eca.communication",
+    "eca.meetings", "eca.people", "eca.work", "eca.projects", "eca.intelligence",
+    "eca.retrieval", "eca.chat", "eca.attention", "eca.privacy",
+]
+shared_modules = ["eca.platform"]
+composition_modules = ["eca.api"]
+http_packages = ["fastapi", "starlette"]
+
+[[tool.importlinter.contracts]]
+name = "Connectors are used only by ingestion and connections"
+type = "forbidden"
+source_modules = [
+    "eca.identity", "eca.communication", "eca.meetings", "eca.people", "eca.work",
+    "eca.projects", "eca.intelligence", "eca.retrieval", "eca.chat", "eca.attention",
+    "eca.privacy", "eca.platform", "eca.api",
+]
+forbidden_modules = ["eca.connectors"]
+
+[[tool.importlinter.contracts]]
+name = "Platform is the base layer and imports no domain module"
+type = "forbidden"
+source_modules = ["eca.platform"]
+forbidden_modules = [
+    "eca.identity", "eca.connections", "eca.ingestion", "eca.connectors", "eca.communication",
+    "eca.meetings", "eca.people", "eca.work", "eca.projects", "eca.intelligence",
+    "eca.retrieval", "eca.chat", "eca.attention", "eca.privacy", "eca.api",
+]

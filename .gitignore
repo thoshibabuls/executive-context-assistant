@@ -1,0 +1,56 @@
+# --- Secrets and local configuration (never commit) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+client_secret*.json
+credentials*.json
+service-account*.json
+token*.json
+*.kek
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Node / web ---
+node_modules/
+.next/
+out/
+
+# --- Local data and databases ---
+*.db
+*.sqlite
+*.sqlite3
+pgdata/
+.local/
+
+# --- Evaluation artifacts that may contain run outputs ---
+evals/**/reports/
+evals/**/cassettes/live/
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
