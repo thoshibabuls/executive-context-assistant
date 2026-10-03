@@ -35,7 +35,7 @@ def _tables(admin_url: str) -> set[str]:
 def test_chain_is_linear_and_ordered() -> None:
     script = ScriptDirectory.from_config(alembic_config("postgresql://unused/unused"))
     chain = [rev.revision for rev in reversed(list(script.walk_revisions()))]
-    assert chain == [f"{n:04d}" for n in range(1, 18)]
+    assert chain == [f"{n:04d}" for n in range(1, 24)]
     assert script.get_heads() == ["0023"]
 
 
