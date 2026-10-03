@@ -66,6 +66,12 @@ class QuotaBucket:
             await asyncio.sleep((units - self.tokens) / self.rate)
 
 
+def retry_after_s(resp: httpx.Response) -> int | None:
+    """The provider's ``Retry-After`` in seconds (delta form), for the job's backoff."""
+    value = resp.headers.get("Retry-After", "").strip()
+    return int(value) if value.isdigit() else None
+
+
 def categories_from_labels(labels: list[str]) -> tuple[str, ...]:
     seen: list[str] = []
     for label in labels:
@@ -107,7 +113,7 @@ class GmailConnector:
                 else UpstreamUnavailable("not found")
             )
         if resp.status_code == 429 or (resp.status_code == 403 and "rateLimit" in resp.text):
-            raise RateLimited("Gmail rate limit", details={"retry_after": resp.headers.get("Retry-After")})
+            raise RateLimited("Gmail rate limit", retry_after_s=retry_after_s(resp))
         if resp.status_code >= 500:
             raise UpstreamUnavailable(f"Gmail returned {resp.status_code}")
         if resp.status_code != 200:

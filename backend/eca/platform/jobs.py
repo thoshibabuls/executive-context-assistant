@@ -26,7 +26,7 @@ import structlog
 from procrastinate import JobContext
 from procrastinate.jobs import Job
 
-from eca.platform.errors import AuthRevoked, Gone, ValidationFailed
+from eca.platform.errors import AuthRevoked, Gone, RateLimited, ValidationFailed
 from eca.platform.events import EventRegistry, Resources
 from eca.platform.handlers import run_handler
 from eca.platform.uow import UnitOfWorkFactory
@@ -46,11 +46,15 @@ def job_lock_key(handler_name: str, event_id: UUID) -> str:
     return f"{handler_name}:{event_id}"
 
 
+MAX_RETRY_AFTER_S = 3600  # a provider's Retry-After is honoured up to one hour
+
+
 class HandlerRetryStrategy(procrastinate.BaseRetryStrategy):
     """Handler job retries (§14.3). Procrastinate's ``RetryStrategy`` cannot express this policy.
 
     Run n = ``job.attempts + 1`` (Procrastinate counts earlier runs). After a failed run n < 8 the
-    job is retried after ``min(base · 2^(n-1) + U[0, 1), max_delay)`` seconds. After run 8, or a
+    job is retried after ``min(base · 2^(n-1) + U[0, 1), max_delay)`` seconds, or after the provider's
+    ``Retry-After`` (``RateLimited.retry_after_s``, at most one hour). After run 8, or a
     non-retryable error, there is no retry: Procrastinate marks the job ``failed`` (a dead job).
     """
 
@@ -90,9 +94,10 @@ class HandlerRetryStrategy(procrastinate.BaseRetryStrategy):
                 error_type=type(exception).__name__,
             )
             return None
-        return procrastinate.RetryDecision(
-            retry_at=self._clock() + datetime.timedelta(seconds=self.delay_s(run))
-        )
+        delay = self.delay_s(run)
+        if isinstance(exception, RateLimited) and exception.retry_after_s:
+            delay = float(min(exception.retry_after_s, MAX_RETRY_AFTER_S))  # the provider decides (§14.3)
+        return procrastinate.RetryDecision(retry_at=self._clock() + datetime.timedelta(seconds=delay))
 
 
 def create_job_app(conninfo: str, *, pool_max_size: int) -> procrastinate.App:

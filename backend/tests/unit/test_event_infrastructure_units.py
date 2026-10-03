@@ -167,6 +167,17 @@ def test_handler_retry_cap_and_jitter() -> None:
     assert strategy.delay_s(8) == 600.0  # 5 * 2^7 = 640 is capped
 
 
+def test_handler_retry_honours_a_provider_retry_after() -> None:
+    from eca.platform.errors import RateLimited
+
+    decision = _strategy().get_retry_decision(exception=RateLimited("r", retry_after_s=90), job=_job(0))
+    assert decision is not None and decision.retry_at == NOW + datetime.timedelta(seconds=90)
+    capped = _strategy().get_retry_decision(exception=RateLimited("r", retry_after_s=86_400), job=_job(0))
+    assert capped is not None and capped.retry_at == NOW + datetime.timedelta(seconds=3600)
+    plain = _strategy().get_retry_decision(exception=RateLimited("r"), job=_job(1))
+    assert plain is not None and plain.retry_at == NOW + datetime.timedelta(seconds=10.5)
+
+
 @pytest.mark.parametrize("exc", [ValidationFailed("v"), AuthRevoked("a"), Gone("g")])
 def test_handler_retry_non_retryable_errors(exc: Exception) -> None:
     assert _strategy().get_retry_decision(exception=exc, job=_job(0)) is None

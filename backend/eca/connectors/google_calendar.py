@@ -4,7 +4,8 @@
   ``nextSyncToken`` becomes the cursor together with the ``query_fingerprint`` of the parameters
   it is bound to (``"<fingerprint>|<syncToken>"``). Page tokens carry the window so every page of
   one run uses identical parameters.
-- Incremental: ``events.list(syncToken=…)`` with the same parameters (includes cancelled events).
+- Incremental: ``events.list(syncToken=…)`` with the same parameters except the window
+  (``singleEvents=true``; includes cancelled events).
 - HTTP 410 Gone → ``CursorExpired`` (sync clears the cursor and runs a full window sync).
 - The daily window roll-forward is done by ingestion (a full sync replaces the cursor).
 - In-job limit 300 requests/min.
@@ -20,7 +21,7 @@ from typing import Any
 import httpx
 
 from eca.connectors.dto import NormalizedAttendee, NormalizedEvent, NormalizedPerson, SyncBatch
-from eca.connectors.gmail import QuotaBucket
+from eca.connectors.gmail import QuotaBucket, retry_after_s
 from eca.platform.errors import AuthRevoked, CursorExpired, RateLimited, UpstreamUnavailable
 
 API = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
@@ -81,6 +82,13 @@ def normalize_event(item: dict[str, Any]) -> NormalizedEvent | None:
     )
 
 
+def _incremental(sync_token: str) -> dict[str, Any]:
+    """A sync-token request repeats the full sync's parameters except the time window, which
+    Google does not allow with a sync token (``singleEvents`` must match, or recurring events
+    would come back as series instead of instances)."""
+    return {"syncToken": sync_token, "singleEvents": "true", "maxResults": 250}
+
+
 class GoogleCalendarConnector:
     def __init__(
         self, http: httpx.AsyncClient, token_provider: TokenProvider, *, bucket: QuotaBucket | None = None
@@ -103,7 +111,7 @@ class GoogleCalendarConnector:
         if resp.status_code == 401:
             raise AuthRevoked("Calendar rejected the access token")
         if resp.status_code == 429 or (resp.status_code == 403 and "usageLimits" in resp.text):
-            raise RateLimited("Calendar rate limit", details={"retry_after": resp.headers.get("Retry-After")})
+            raise RateLimited("Calendar rate limit", retry_after_s=retry_after_s(resp))
         if resp.status_code != 200:
             raise UpstreamUnavailable(f"Calendar returned {resp.status_code}")
         body: dict[str, Any] = resp.json()
@@ -114,10 +122,10 @@ class GoogleCalendarConnector:
     ) -> SyncBatch[NormalizedEvent]:
         if cursor is not None and not page_token:
             fingerprint, _, sync_token = cursor.partition("|")
-            return await self._page({"syncToken": sync_token}, fingerprint, None)
+            return await self._page(_incremental(sync_token), fingerprint, None, incremental=sync_token)
         if page_token and page_token.startswith("inc|"):
             _, fingerprint, sync_token, gtoken = page_token.split("|", 3)
-            return await self._page({"syncToken": sync_token}, fingerprint, gtoken, incremental=sync_token)
+            return await self._page(_incremental(sync_token), fingerprint, gtoken, incremental=sync_token)
         if page_token:
             _, time_min, time_max, gtoken = page_token.split("|", 3)
         else:
