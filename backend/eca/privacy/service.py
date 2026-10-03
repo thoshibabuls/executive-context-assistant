@@ -148,6 +148,7 @@ async def run_account_deletion(
     http: httpx.AsyncClient | None,
     now: datetime.datetime,
     storage: ObjectStorage | None = None,
+    delete_provider_file: Callable[[intelligence.FileRef], Awaitable[None]] | None = None,
 ) -> bool:
     """Run (or resume) the account deletion job. False when there is nothing left to do."""
     async with factory(user_id=user_id) as uow:
@@ -158,6 +159,12 @@ async def run_account_deletion(
         await _set_progress(uow, job_id, job["progress"], now=now)
     if "objects" not in done:
         # Uploaded media live in object storage, outside the database: they go first (§13.3).
+        # Provider (Files API) uploads are deleted outside any transaction; they expire in 48 h.
+        if delete_provider_file is not None:
+            async with factory(user_id=user_id) as uow:
+                refs = await meetings.provider_file_refs(uow)
+            for ref in refs:
+                await delete_provider_file(ref)
         async with factory(user_id=user_id) as uow:
             if storage is not None:
                 await meetings.delete_user_objects(uow, storage)

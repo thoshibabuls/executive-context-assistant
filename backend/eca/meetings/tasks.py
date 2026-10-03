@@ -1,5 +1,5 @@
 """Meetings handlers: calendar source items → meetings; Phase 4: the media sweep (upload expiry,
-retry and budget re-publish)."""
+retry and budget re-publish, raw media retention, expired provider-file references)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,12 @@ from eca.ingestion import (
     SourceItemStageDue,
     SourceItemStored,
 )
-from eca.meetings.recordings import expire_pending_uploads, publish_due_stages
+from eca.meetings.recordings import (
+    clear_expired_provider_files,
+    expire_pending_uploads,
+    publish_due_stages,
+    purge_raw_media,
+)
 from eca.meetings.service import cancel_from_deleted_source, upsert_from_source
 from eca.platform.config import get_settings
 from eca.platform.events import HandlerContext, handles
@@ -67,13 +72,15 @@ async def _media_sweep(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -
     storage = _storage()
     async with uow_factory(user_id=None) as uow:
         users = await list_active_user_ids(uow)
-    expired = due = 0
+    expired = due = purged = 0
     for user_id in users:
         async with uow_factory(user_id=user_id) as uow:
             expired += await expire_pending_uploads(uow, storage, now=now)
             due += await publish_due_stages(uow, now=now)
-    if expired or due:
-        log.info("media_sweep", expired_uploads=expired, stages_due=due)
+            purged += await purge_raw_media(uow, storage, now=now)
+            await clear_expired_provider_files(uow, now=now)
+    if expired or due or purged:
+        log.info("media_sweep", expired_uploads=expired, stages_due=due, raw_purged=purged)
 
 
 def periodic_tasks() -> list[PeriodicTaskSpec]:

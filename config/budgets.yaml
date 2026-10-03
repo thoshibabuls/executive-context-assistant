@@ -17,6 +17,12 @@ global_alert_fraction: 0.70
 # and for the user's own outbound mail.
 vip_min_importance: 4
 
+# Meeting uploads (AI_COST_MODEL.md §7.3): media longer than max_upload_hours, or that would take the
+# user's media hours of the last 7 x 24 h above max_weekly_hours, are rejected after ffprobe.
+meetings:
+  max_upload_hours: 3
+  max_weekly_hours: 10
+
 # stop_at: the per-user level at which the role is refused (soft | hard | never).
 # background: also stops for everyone when the global budget is spent.
 # exempt_allowed: the caller may pass the VIP/outbound exemption (AI-01 only).

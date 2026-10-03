@@ -104,6 +104,8 @@ evidence_table = Table(
     Column("quote", Text, nullable=False),
     Column("char_start", Integer),
     Column("char_end", Integer),
+    Column("start_ms", Integer),
+    Column("end_ms", Integer),
     Column("occurred_at", _TS, nullable=False),
     Column("created_at", _TS),
 )

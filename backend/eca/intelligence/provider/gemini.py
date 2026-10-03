@@ -45,6 +45,8 @@ _THINKING = {
     "high": genai_types.ThinkingLevel.HIGH,
 }
 _SAFETY_FINISH = {"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION"}
+FILE_ACTIVE_TIMEOUT_S = 300.0
+FILE_POLL_S = 2.0
 
 
 def _map_error(exc: BaseException) -> ProviderError:
@@ -168,7 +170,25 @@ class GeminiProvider:
             raise _map_error(exc) from exc
         if not uploaded.name or not uploaded.uri:
             raise EmptyResponse("file upload returned no name or URI")
+        await self._wait_active(uploaded.name, getattr(uploaded, "state", None))
         return FileRef(name=uploaded.name, uri=uploaded.uri, mime_type=uploaded.mime_type or mime_type)
+
+    async def _wait_active(self, name: str, state: Any) -> None:
+        """Audio uploads are processed before use: poll until ACTIVE (FAILED is a rejection)."""
+        deadline = asyncio.get_running_loop().time() + FILE_ACTIVE_TIMEOUT_S
+        while True:
+            label = getattr(state, "name", None) or (str(state) if state else "ACTIVE")
+            if label.endswith("ACTIVE"):
+                return
+            if label.endswith("FAILED"):
+                raise ProviderRejected("the provider could not process the uploaded file")
+            if asyncio.get_running_loop().time() > deadline:
+                raise ProviderTimeout("the uploaded file did not become active in time")
+            await asyncio.sleep(FILE_POLL_S)
+            try:
+                state = getattr(await self._client.aio.files.get(name=name), "state", None)
+            except Exception as exc:
+                raise _map_error(exc) from exc
 
     async def delete_file(self, ref: FileRef) -> None:
         try:

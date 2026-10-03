@@ -13,6 +13,7 @@ from eca.intelligence.output_schemas.email_extract import (
 from eca.intelligence.output_schemas.plan_query import PlanQuery
 from eca.intelligence.output_schemas.reply_guidance import ReplyGuidance
 from eca.intelligence.output_schemas.thread_summary import KeyPoint, ThreadSummary
+from eca.intelligence.output_schemas.transcribe import SegmentOut, Transcription
 
 __all__ = [
     "Adjudication",
@@ -24,8 +25,10 @@ __all__ = [
     "Mention",
     "PlanQuery",
     "ReplyGuidance",
+    "SegmentOut",
     "Statement",
     "StatusSignal",
     "ThreadSummary",
+    "Transcription",
     "Triage",
 ]

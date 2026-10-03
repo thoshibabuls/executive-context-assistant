@@ -21,11 +21,13 @@ class Usage:
 
 @dataclass(frozen=True)
 class FileRef:
-    """A file uploaded through the provider's Files API (audio for AI-09)."""
+    """A file uploaded through the provider's Files API (audio for AI-09). ``sha256`` (hex) is the
+    file's content digest: the cassette key uses it instead of the per-upload URI."""
 
     name: str
     uri: str
     mime_type: str
+    sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,9 +145,10 @@ class SchemaInvalid(AIError):
 
     status = CallStatus.SCHEMA_INVALID
 
-    def __init__(self, summary: str) -> None:
+    def __init__(self, summary: str, *, finish_reason: str | None = None) -> None:
         super().__init__(summary)
         self.summary = summary  # field paths and error types only, never output text
+        self.finish_reason = finish_reason  # MAX_TOKENS: the output limit cut the JSON (AI-09 windows)
 
 
 class CassetteMiss(AIError):

@@ -30,7 +30,13 @@ from eca import communication, ingestion, intelligence, meetings, people, projec
 from eca.intelligence import AIClient, BudgetLevel, EmbeddingUnavailable
 from eca.platform.ids import uuid7
 from eca.platform.uow import UnitOfWork, UnitOfWorkFactory
-from eca.retrieval.chunking import ChunkDraft, calendar_chunks, email_chunks
+from eca.retrieval.chunking import (
+    ChunkDraft,
+    TranscriptLine,
+    calendar_chunks,
+    email_chunks,
+    transcript_chunks,
+)
 from eca.retrieval.mentions import AliasMatcher, AliasTarget
 from eca.retrieval.models import chunks_table
 
@@ -50,15 +56,15 @@ _UPSERT_SQL = text(
     """
     INSERT INTO chunks (id, user_id, source_item_id, chunk_index, kind, title, text, token_count,
                         content_hash, occurred_at, conversation_id, meeting_id, person_ids,
-                        embedding, embedding_model, embedded_at)
+                        embedding, embedding_model, embedded_at, start_ms, end_ms)
     VALUES (:id, :user_id, :source_item_id, :chunk_index, :kind, :title, :text, :token_count,
             :content_hash, :occurred_at, :conversation_id, :meeting_id, CAST(:person_ids AS uuid[]),
-            CAST(:embedding AS halfvec), :embedding_model, :embedded_at)
+            CAST(:embedding AS halfvec), :embedding_model, :embedded_at, :start_ms, :end_ms)
     ON CONFLICT (source_item_id, chunk_index) DO UPDATE SET
         kind = EXCLUDED.kind, title = EXCLUDED.title, text = EXCLUDED.text,
         token_count = EXCLUDED.token_count, occurred_at = EXCLUDED.occurred_at,
         conversation_id = EXCLUDED.conversation_id, meeting_id = EXCLUDED.meeting_id,
-        person_ids = EXCLUDED.person_ids,
+        person_ids = EXCLUDED.person_ids, start_ms = EXCLUDED.start_ms, end_ms = EXCLUDED.end_ms,
         embedding = CASE WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding
                          WHEN chunks.content_hash = EXCLUDED.content_hash THEN chunks.embedding END,
         embedding_model = CASE
@@ -174,6 +180,35 @@ async def meeting_target(uow: UnitOfWork, meeting_id: UUID) -> IndexTarget | Non
     )
 
 
+async def transcript_target(uow: UnitOfWork, recording_id: UUID) -> IndexTarget | None:
+    """Transcript windows of the current version of a recording (CONTEXT_ARCHITECTURE.md §9.11):
+    lines carry the mapped person's display name, else the diarization label."""
+    view = await meetings.current_transcript(uow, recording_id)
+    if view is None:
+        return None
+    self_p = await people.get_self_person(uow)
+    mapped = sorted(set(view.speaker_people.values()) | set(view.attendee_ids))
+    refs = await people.get_persons(uow, mapped)
+    names = {
+        label: (refs[pid].display_name or refs[pid].primary_email or label) if pid in refs else label
+        for label, pid in view.speaker_people.items()
+    }
+    lines = [
+        TranscriptLine(
+            s.start_ms, s.end_ms, names.get(s.speaker_label or "", s.speaker_label or "Speaker"), s.text
+        )
+        for s in view.segments
+    ]
+    return IndexTarget(
+        source_item_id=view.source_item_id,
+        occurred_at=view.starts_at,
+        conversation_id=None,
+        meeting_id=view.meeting_id,
+        person_ids=tuple(p for p in mapped if p != self_p.id),
+        drafts=tuple(transcript_chunks(view.title, lines)),
+    )
+
+
 async def _stored(uow: UnitOfWork, source_item_id: UUID) -> dict[int, tuple[bytes, str | None]]:
     t = chunks_table
     rows = await uow.session.execute(
@@ -234,13 +269,15 @@ async def _write(
                     "text": d.text,
                     "token_count": d.token_count,
                     "content_hash": digest,
-                    "occurred_at": target.occurred_at,
+                    "occurred_at": target.occurred_at + datetime.timedelta(milliseconds=d.start_ms or 0),
                     "conversation_id": target.conversation_id,
                     "meeting_id": target.meeting_id,
                     "person_ids": list(target.person_ids),
                     "embedding": intelligence.vector_literal(embedded[1]) if use and embedded else None,
                     "embedding_model": model if use else None,
                     "embedded_at": now if use else None,
+                    "start_ms": d.start_ms,
+                    "end_ms": d.end_ms,
                 },
             )
         ).one()

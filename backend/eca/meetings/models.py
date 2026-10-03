@@ -1,4 +1,4 @@
-"""Tables owned by ``meetings`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0010 and 0024."""
+"""Tables owned by ``meetings`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0010, 0024 and 0025."""
 
 from __future__ import annotations
 
@@ -89,4 +89,19 @@ recordings_table = Table(
     Column("version", Integer, nullable=False),
     Column("created_at", _TS),
     Column("updated_at", _TS),
+)
+
+transcript_segments_table = Table(
+    "transcript_segments",
+    metadata,
+    Column("id", _U, primary_key=True),
+    Column("user_id", _U, nullable=False),
+    Column("recording_id", _U, nullable=False),
+    Column("transcription_model", Text, nullable=False),
+    Column("seq", Integer, nullable=False),
+    Column("start_ms", Integer),
+    Column("end_ms", Integer),
+    Column("speaker_label", Text),
+    Column("text", Text, nullable=False),
+    Column("created_at", _TS),
 )

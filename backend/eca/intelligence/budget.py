@@ -78,6 +78,15 @@ class _Caps(BaseModel):
         return self
 
 
+class MeetingLimits(BaseModel):
+    """Meeting upload limits (AI_COST_MODEL.md §7, §7.3), checked after ``ffprobe``."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_upload_hours: float = Field(default=3.0, gt=0)
+    max_weekly_hours: float = Field(default=10.0, gt=0)
+
+
 class BudgetConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -87,6 +96,7 @@ class BudgetConfig(BaseModel):
     global_alert_fraction: float = Field(default=0.7, gt=0, le=1)
     vip_min_importance: int = Field(default=4, ge=1, le=5)
     roles: dict[str, RolePolicy] = Field(default_factory=dict)
+    meetings: MeetingLimits = Field(default_factory=MeetingLimits)
 
     @classmethod
     def from_file(cls, path: Path) -> BudgetConfig:

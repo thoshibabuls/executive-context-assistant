@@ -11,6 +11,8 @@ from eca.platform.events import register_event
 MEETING_CHANGED = "MeetingChanged"
 RECORDING_UPLOADED = "RecordingUploaded"
 RECORDING_STAGE_DUE = "RecordingStageDue"
+RECORDING_PREPARED = "RecordingPrepared"
+TRANSCRIPT_STORED = "TranscriptStored"
 
 
 class MeetingChanged(BaseModel):
@@ -35,6 +37,24 @@ class RecordingStageDue(BaseModel):
     stage: str  # prepare | transcribe | extract
 
 
+class RecordingPrepared(BaseModel):
+    """The prepared mono Opus audio is stored: ``transcribe`` (AI-09) runs next."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    recording_id: UUID
+
+
+class TranscriptStored(BaseModel):
+    """A transcript version is stored (AI-09 or a parsed file): index it and extract the meeting."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    recording_id: UUID
+    source_item_id: UUID
+    transcription_model: str
+
+
 register_event(MEETING_CHANGED, MeetingChanged)
 register_event(RECORDING_UPLOADED, RecordingUploaded)
 register_event(RECORDING_STAGE_DUE, RecordingStageDue)
+register_event(RECORDING_PREPARED, RecordingPrepared)
+register_event(TRANSCRIPT_STORED, TranscriptStored)

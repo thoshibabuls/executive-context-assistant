@@ -8,6 +8,7 @@ import httpx
 
 from eca.connections import TokenCrypto
 from eca.identity import USER_DELETION_REQUESTED, UserDeletionRequested
+from eca.intelligence import AIClient
 from eca.platform.clock import Clock
 from eca.platform.events import HandlerContext, Resources, handles
 from eca.platform.jobs import PeriodicTaskSpec
@@ -39,6 +40,7 @@ async def on_user_deletion_requested(ctx: HandlerContext) -> None:
     crypto = _optional(ctx.resources, TokenCrypto)
     http = _optional(ctx.resources, httpx.AsyncClient)
     storage = _optional(ctx.resources, ObjectStorage)
+    client = _optional(ctx.resources, AIClient)
     await run_account_deletion(
         ctx.factory,
         user_id=payload.user_id,
@@ -47,6 +49,7 @@ async def on_user_deletion_requested(ctx: HandlerContext) -> None:
         http=http if isinstance(http, httpx.AsyncClient) else None,
         now=ctx.resources.get(Clock).now(),
         storage=storage if isinstance(storage, ObjectStorage) else None,
+        delete_provider_file=client.delete_file if isinstance(client, AIClient) else None,
     )
 
 

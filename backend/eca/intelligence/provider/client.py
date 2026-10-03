@@ -9,12 +9,14 @@ output schema. Retry and fallback decisions belong to the caller (``attempts``).
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import json
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 from typing import Generic, Protocol, TypeVar
 from uuid import UUID
 
@@ -58,6 +60,7 @@ class GenerateResult(Generic[OutputT]):
     from_cassette: bool
     call_id: UUID | None
     model_version: str | None = None  # the provider's resolved model version, when reported
+    finish_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,9 +134,11 @@ class AIClient:
         use_fallback: bool = False,
         repair_note: str | None = None,
         budget_exempt: bool = False,
+        audio_seconds: float | None = None,
     ) -> GenerateResult[OutputT]:
         """One structured-output call for ``role``. Raises ``ProviderError``, ``SchemaInvalid`` or
-        ``BudgetExceeded`` (``budget_exempt``: the VIP/outbound exemption of AI-01, §7.2)."""
+        ``BudgetExceeded`` (``budget_exempt``: the VIP/outbound exemption of AI-01, §7.2).
+        ``audio_seconds``: the input audio's length, metered for per-minute prices (AI-09)."""
         spec = self.registry.role(role)
         if spec.is_embedding:
             raise AIError(f"AI role {role!r} is an embedding role")
@@ -172,22 +177,61 @@ class AIClient:
                 assert self._cassettes is not None
                 self._cassettes.put_generate(key, model, response)
 
-        cost = self.prices.cost(model, response.usage, day=self._clock().date())
+        usage = response.usage
+        if audio_seconds is not None:
+            usage = dataclasses.replace(usage, audio_seconds=float(audio_seconds))
+        cost = self.prices.cost(model, usage, day=self._clock().date())
         try:
             output = output_model.model_validate(json.loads(response.text))
         except (json.JSONDecodeError, ValidationError) as exc:
             summary = "invalid JSON" if isinstance(exc, json.JSONDecodeError) else _validation_summary(exc)
             if not from_cassette:
                 await self._meter_call(
-                    record, response.usage, latency_ms, CallStatus.SCHEMA_INVALID, "schema_invalid", cost
+                    record, usage, latency_ms, CallStatus.SCHEMA_INVALID, "schema_invalid", cost
                 )
-            raise SchemaInvalid(summary) from exc
+            raise SchemaInvalid(summary, finish_reason=response.finish_reason) from exc
         call_id = None
         if not from_cassette:
-            call_id = await self._meter_call(record, response.usage, latency_ms, CallStatus.OK, None, cost)
+            call_id = await self._meter_call(record, usage, latency_ms, CallStatus.OK, None, cost)
         return GenerateResult(
-            output, model, response.usage, cost, latency_ms, from_cassette, call_id, response.model_version
+            output,
+            model,
+            usage,
+            cost,
+            latency_ms,
+            from_cassette,
+            call_id,
+            response.model_version,
+            response.finish_reason,
         )
+
+    async def upload_file(self, path: Path, *, mime_type: str, sha256: str) -> FileRef:
+        """Files API upload (AI-09 audio). Replay mode never uploads: the reference carries only the
+        content digest, which is all a cassette key uses."""
+        if self.mode == "replay":
+            return FileRef(
+                name=f"replay/{sha256}", uri=f"replay://{sha256}", mime_type=mime_type, sha256=sha256
+            )
+        uploader = getattr(self._provider, "upload_file", None)
+        if uploader is None:
+            raise AIError("the provider has no Files API")
+        ref = await uploader(path, mime_type=mime_type)
+        assert isinstance(ref, FileRef)
+        return dataclasses.replace(ref, sha256=sha256)
+
+    async def delete_file(self, ref: FileRef) -> None:
+        """Delete a Files API upload (after transcription, retention, account deletion). Idempotent
+        from the caller's view: a file that is already gone is not an error."""
+        if self.mode == "replay" or ref.uri.startswith("replay://"):
+            return
+        deleter = getattr(self._provider, "delete_file", None)
+        if deleter is None:
+            raise AIError("the provider has no Files API")
+        try:
+            await deleter(ref)
+        except ProviderError as exc:
+            if exc.code != 404:
+                raise
 
     async def embed(
         self,

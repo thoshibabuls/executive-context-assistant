@@ -23,6 +23,7 @@ from eca.intelligence.budget import (
     BudgetGuard,
     BudgetLevel,
     CostRow,
+    MeetingLimits,
     RolePolicy,
     audit_budget_caps,
     budget_level,
@@ -81,9 +82,11 @@ from eca.intelligence.output_schemas import (
     KeyPoint,
     PlanQuery,
     ReplyGuidance,
+    SegmentOut,
     Statement,
     StatusSignal,
     ThreadSummary,
+    Transcription,
     Triage,
 )
 from eca.intelligence.provenance import EvidenceSpan, Provenance, SourceRef, confidence_band
@@ -129,6 +132,7 @@ from eca.intelligence.purge import (
     purge_user,
 )
 from eca.intelligence.tasks import COST_ROLLUP_TASK, periodic_tasks
+from eca.intelligence.transcription import TRANSCRIBE_PROMPT_VERSION, TranscribeOutcome, run_transcribe
 
 __all__ = [
     "AI_CALLS_RETENTION_DAYS",
@@ -143,6 +147,7 @@ __all__ = [
     "REPLY_GUIDANCE_PROMPT_VERSION",
     "SYNTHESIS_PROMPT_VERSION",
     "THREAD_SUMMARY_PROMPT_VERSION",
+    "TRANSCRIBE_PROMPT_VERSION",
     "AIClient",
     "AIConfig",
     "AIError",
@@ -178,6 +183,7 @@ __all__ = [
     "GenerateResult",
     "InteractiveCall",
     "KeyPoint",
+    "MeetingLimits",
     "Meter",
     "NoFallback",
     "Participant",
@@ -198,10 +204,13 @@ __all__ = [
     "RunOutcome",
     "SafetyBlocked",
     "SchemaInvalid",
+    "SegmentOut",
     "SourceRef",
     "Statement",
     "StatusSignal",
     "ThreadSummary",
+    "TranscribeOutcome",
+    "Transcription",
     "Triage",
     "UnknownRole",
     "Usage",
@@ -247,6 +256,7 @@ __all__ = [
     "run_plan_query",
     "run_reply_guidance",
     "run_thread_summary",
+    "run_transcribe",
     "seconds_until_reset",
     "set_code_path",
     "store_failure",

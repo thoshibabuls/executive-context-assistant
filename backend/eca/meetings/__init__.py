@@ -6,14 +6,19 @@ pipeline and transcripts (4.2), speaker mapping and the meeting summary (4.3), p
 Other modules import only from this package root.
 """
 
+from eca.meetings import pipeline as _pipeline  # registers handlers
 from eca.meetings import tasks as _tasks  # registers handlers
 from eca.meetings.events import (
     MEETING_CHANGED,
+    RECORDING_PREPARED,
     RECORDING_STAGE_DUE,
     RECORDING_UPLOADED,
+    TRANSCRIPT_STORED,
     MeetingChanged,
+    RecordingPrepared,
     RecordingStageDue,
     RecordingUploaded,
+    TranscriptStored,
 )
 from eca.meetings.recordings import (
     MAX_MEDIA_BYTES,
@@ -29,6 +34,7 @@ from eca.meetings.recordings import (
     link_meeting,
     list_recordings_page,
     meeting_suggestions,
+    provider_file_refs,
     recording_for_meeting,
     recordings_by_source,
     retry_recording,
@@ -47,38 +53,48 @@ from eca.meetings.service import (
     upsert_from_source,
 )
 from eca.meetings.tasks import MEDIA_SWEEP_TASK, periodic_tasks
+from eca.meetings.transcripts import Segment, TranscriptView, current_transcript, load_segments
 
-del _tasks
+del _pipeline, _tasks
 
 __all__ = [
     "MAX_MEDIA_BYTES",
     "MAX_TRANSCRIPT_BYTES",
     "MEDIA_SWEEP_TASK",
     "MEETING_CHANGED",
+    "RECORDING_PREPARED",
     "RECORDING_STAGE_DUE",
     "RECORDING_UPLOADED",
+    "TRANSCRIPT_STORED",
     "MeetingChanged",
     "MeetingDetail",
     "MeetingSuggestion",
     "MeetingView",
+    "RecordingPrepared",
     "RecordingStageDue",
     "RecordingUploaded",
     "RecordingView",
+    "Segment",
+    "TranscriptStored",
+    "TranscriptView",
     "UploadInit",
     "cancel_from_deleted_source",
     "classify_upload",
     "complete_upload",
+    "current_transcript",
     "delete_user_objects",
     "get_meeting_details",
     "get_recording",
     "init_upload",
     "link_meeting",
     "list_recordings_page",
+    "load_segments",
     "meeting_details_between",
     "meeting_suggestions",
     "meetings_between",
     "meetings_by_sources",
     "periodic_tasks",
+    "provider_file_refs",
     "purge_sources",
     "purge_user",
     "recording_for_meeting",

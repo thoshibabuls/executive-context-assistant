@@ -33,7 +33,10 @@ _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 
 def _canonical(value: Any) -> Any:
     if isinstance(value, FileRef):
-        # Files are identified by content elsewhere; the key uses MIME type and URI only.
+        # A file is identified by its content digest when known (AI-09 audio, AI_PIPELINE.md §5.10),
+        # so a replay does not depend on the provider's per-upload URI.
+        if value.sha256:
+            return {"file_sha256": value.sha256, "mime_type": value.mime_type}
         return {"file_uri": value.uri, "mime_type": value.mime_type}
     if isinstance(value, tuple | list):
         return [_canonical(v) for v in value]

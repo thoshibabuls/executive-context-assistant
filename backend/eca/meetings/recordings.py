@@ -19,6 +19,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from eca.ingestion import register_upload
+from eca.intelligence import FileRef
 from eca.meetings.events import (
     RECORDING_STAGE_DUE,
     RECORDING_UPLOADED,
@@ -328,6 +329,10 @@ async def retry_recording(uow: UnitOfWork, recording_id: UUID) -> RecordingView:
     row = await _row(uow, recording_id, for_update=True)
     if row.status != "failed" or row.failed_stage not in STAGE_START:
         raise Conflict("only a failed recording can be retried", details={"reason": "not_failed"})
+    if row.raw_purged_at is not None and row.failed_stage != "extract":
+        raise Conflict(
+            "the media was deleted after 30 days; upload it again", details={"reason": "media_purged"}
+        )
     t = recordings_table
     await uow.session.execute(
         update(t)
@@ -473,6 +478,69 @@ async def publish_due_stages(uow: UnitOfWork, *, now: datetime.datetime) -> int:
             ),
         )
     return len(rows)
+
+
+RAW_RETENTION_READY = datetime.timedelta(days=7)
+RAW_RETENTION_REJECTED = datetime.timedelta(days=7)
+RAW_RETENTION_FAILED = datetime.timedelta(days=30)
+
+
+async def purge_raw_media(uow: UnitOfWork, storage: ObjectStorage, *, now: datetime.datetime) -> int:
+    """Retention (TECHNICAL_DESIGN.md §9.3): the original and the prepared audio are deleted 7 days
+    after processing or rejection and 30 days after a failure. Rows, transcripts and facts stay."""
+    t = recordings_table
+    due = or_(
+        and_(t.c.status == "ready", t.c.processed_at < now - RAW_RETENTION_READY),
+        and_(t.c.status == "rejected", t.c.updated_at < now - RAW_RETENTION_REJECTED),
+        and_(t.c.status == "failed", t.c.updated_at < now - RAW_RETENTION_FAILED),
+    )
+    rows = (
+        await uow.session.execute(
+            select(t.c.id, t.c.storage_key, t.c.audio_storage_key)
+            .where(t.c.user_id == uow.user_id, t.c.raw_purged_at.is_(None), due)
+            .with_for_update(skip_locked=True)
+        )
+    ).all()
+    for row in rows:
+        await storage.delete(row.storage_key)
+        if row.audio_storage_key:
+            await storage.delete(row.audio_storage_key)
+    if rows:
+        await uow.session.execute(
+            update(t)
+            .where(t.c.id.in_([r.id for r in rows]))
+            .values(raw_purged_at=now, provider_file_ref=None, provider_file_expires_at=None)
+        )
+    return len(rows)
+
+
+async def clear_expired_provider_files(uow: UnitOfWork, *, now: datetime.datetime) -> int:
+    """Provider files past their expiry are gone at the provider (48 h): drop the reference."""
+    t = recordings_table
+    result = await uow.session.execute(
+        update(t)
+        .where(
+            t.c.user_id == uow.user_id,
+            t.c.provider_file_expires_at.is_not(None),
+            t.c.provider_file_expires_at < now,
+        )
+        .values(provider_file_ref=None, provider_file_expires_at=None)
+    )
+    return int(result.rowcount)  # type: ignore[attr-defined]
+
+
+async def provider_file_refs(uow: UnitOfWork) -> list[FileRef]:
+    """Provider files still referenced by the user's recordings (account deletion deletes them
+    outside any transaction, before the objects)."""
+    t = recordings_table
+    rows = await uow.session.execute(
+        select(t.c.provider_file_ref).where(t.c.user_id == uow.user_id, t.c.provider_file_ref.is_not(None))
+    )
+    return [
+        FileRef(name=d["name"], uri=d["uri"], mime_type=d["mime_type"], sha256=d.get("sha256"))
+        for d in (r.provider_file_ref for r in rows)
+        if d
+    ]
 
 
 async def object_keys(uow: UnitOfWork) -> list[str]:
