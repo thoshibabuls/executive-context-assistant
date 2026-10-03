@@ -267,4 +267,7 @@ def api_harness(db: TempDatabase, tmp_path: Path) -> Iterator[ApiHarness]:
     )
     app = create_app(settings)
     with TestClient(app, raise_server_exceptions=True) as client:
-        yield ApiHarness(db=db, client=client, objects=objects)
+        harness = ApiHarness(db=db, client=client, objects=objects)
+        # The API's interactive AI calls (chat, reply guidance, topics) use the same fake provider.
+        app.state.ai_client = fake_ai_client(harness.fake_ai, uow_factory=app.state.uow_factory)
+        yield harness
