@@ -229,10 +229,42 @@ def test_tampered_cassette_is_a_miss(tmp_path: Path) -> None:
         store.get_generate(key)
 
 
-@pytest.mark.parametrize("segment", ["../escape", "a/b", ""])
+@pytest.mark.parametrize("segment", ["../escape", "a/b", "", "..", "."])
 def test_cassette_keys_reject_unsafe_segments(segment: str) -> None:
     with pytest.raises(ValueError):
         CassetteKey(segment, "v1", "a" * 64)
+
+
+@pytest.mark.parametrize("version", ["../v1", "email_extract/..", "a//v1", "/v1", "v1/", "a/b c"])
+def test_cassette_keys_reject_unsafe_prompt_versions(version: str) -> None:
+    with pytest.raises(ValueError):
+        CassetteKey("extract", version, "a" * 64)
+
+
+def test_every_production_prompt_version_is_a_valid_cassette_key(tmp_path: Path) -> None:
+    """Regression: the "<prompt>/<version>" format of every AI role used to fail the key check, so
+    every real call raised before reaching the provider."""
+    from eca.intelligence import answering, embedding, extraction, meeting_extraction, transcription
+
+    versions = [
+        answering.PLAN_PROMPT_VERSION,
+        answering.LOOKUP_PROMPT_VERSION,
+        answering.SYNTHESIS_PROMPT_VERSION,
+        answering.THREAD_SUMMARY_PROMPT_VERSION,
+        answering.REPLY_GUIDANCE_PROMPT_VERSION,
+        answering.MEETING_ASKS_PROMPT_VERSION,
+        embedding.EMBED_INPUT_VERSION,
+        extraction.EMAIL_PROMPT_VERSION,
+        extraction.ADJ_PROMPT_VERSION,
+        meeting_extraction.MEETING_PROMPT_VERSION,
+        transcription.TRANSCRIBE_PROMPT_VERSION,
+    ]
+    store = CassetteStore(tmp_path)
+    for version in versions:
+        key = CassetteKey("role", version, "b" * 64)
+        path = store.put_generate(key, "m", GenerateResponse(text="{}", usage=Usage()))
+        assert path == tmp_path / "role" / Path(*version.split("/")) / f"{'b' * 64}.json"
+        assert store.get_generate(key).text == "{}"
 
 
 # ---------------------------------------------------------------- attempt caps

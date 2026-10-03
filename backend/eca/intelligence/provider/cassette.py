@@ -62,8 +62,10 @@ class CassetteKey:
     input_hash: str
 
     def __post_init__(self) -> None:
-        for segment in (self.role, self.prompt_version):
-            if not _SAFE_SEGMENT.fullmatch(segment):
+        # Prompt versions are "<prompt>/<version>" (e.g. "email_extract/v1"), so a version may span
+        # directories; every path component must be a safe, non-dot name.
+        for segment in (self.role, *self.prompt_version.split("/")):
+            if not _SAFE_SEGMENT.fullmatch(segment) or segment in (".", ".."):
                 raise ValueError(f"unsafe cassette key segment {segment!r}")
         if not re.fullmatch(r"[0-9a-f]{64}", self.input_hash):
             raise ValueError("input_hash must be a SHA-256 hex digest")
@@ -145,5 +147,5 @@ class CassetteStore:
             "model": model,
             "response": response,
         }
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         return path
