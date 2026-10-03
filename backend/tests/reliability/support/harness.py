@@ -29,6 +29,15 @@ from tests.reliability.support.synthetic import SyntheticPayload, build_registry
 
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 
+# On Windows, SIGTERM is TerminateProcess (exit code 1, no cleanup). A worker started in its own
+# process group stops gracefully on CTRL_BREAK_EVENT instead (eca.worker.runner).
+if sys.platform == "win32":
+    _GRACEFUL_STOP = signal.CTRL_BREAK_EVENT
+    _POPEN_FLAGS = subprocess.CREATE_NEW_PROCESS_GROUP
+else:
+    _GRACEFUL_STOP = signal.SIGTERM
+    _POPEN_FLAGS = 0
+
 
 @dataclass
 class WorkerProcess:
@@ -40,9 +49,9 @@ class WorkerProcess:
         return self.proc.wait(timeout=timeout)
 
     def stop(self, timeout: float = 20.0) -> int:
-        """Graceful stop (SIGTERM); kill if it does not end in time."""
+        """Graceful stop (SIGTERM; CTRL_BREAK_EVENT on Windows); kill if it does not end in time."""
         if self.proc.poll() is None:
-            self.proc.send_signal(signal.SIGTERM)
+            self.proc.send_signal(_GRACEFUL_STOP)
             try:
                 return self.proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -103,6 +112,7 @@ def start_worker(
             env=env,
             stdout=out,
             stderr=subprocess.STDOUT,
+            creationflags=_POPEN_FLAGS,
         )
     return WorkerProcess(proc=proc, log_path=log_path)
 

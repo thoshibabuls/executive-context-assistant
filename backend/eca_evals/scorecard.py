@@ -231,6 +231,8 @@ def to_markdown(sc: Scorecard) -> str:
 def write_report(sc: Scorecard, directory: Path) -> tuple[Path, Path]:
     directory.mkdir(parents=True, exist_ok=True)
     json_path, md_path = directory / "scorecard.json", directory / "scorecard.md"
-    json_path.write_text(json.dumps(to_json(sc), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    md_path.write_text(to_markdown(sc), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(to_json(sc), indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    md_path.write_text(to_markdown(sc), encoding="utf-8", newline="\n")
     return json_path, md_path

@@ -1004,9 +1004,11 @@ def build_world_v1(target: Path) -> dict[str, Any]:
         )
         row["case_ids"].append(e.case_id)
         row["challenge_tags"] = sorted(set(row["challenge_tags"]) | set(e.challenge_tags))
-    (target / "labels" / "triage.jsonl").write_text(_jsonl(triage_rows), encoding="utf-8")
-    (target / "labels" / "items.jsonl").write_text(_jsonl(item_rows), encoding="utf-8")
-    (target / "labels" / "threads.jsonl").write_text(_jsonl(list(thread_rows.values())), encoding="utf-8")
+    (target / "labels" / "triage.jsonl").write_text(_jsonl(triage_rows), encoding="utf-8", newline="\n")
+    (target / "labels" / "items.jsonl").write_text(_jsonl(item_rows), encoding="utf-8", newline="\n")
+    (target / "labels" / "threads.jsonl").write_text(
+        _jsonl(list(thread_rows.values())), encoding="utf-8", newline="\n"
+    )
 
     scenario = {
         "dataset": "world_v1",
@@ -1028,5 +1030,6 @@ def build_world_v1(target: Path) -> dict[str, Any]:
         "All names, companies and domains are fictional.\n"
         + yaml.safe_dump(scenario, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
+        newline="\n",
     )
     return {"emails": len(emails), "threads": len(thread_rows), "statements": len(item_rows)}

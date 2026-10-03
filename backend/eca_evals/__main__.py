@@ -95,7 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         out = args.out or _report_dir(CONTEXT_REPORTS_DIR, "context_l2")
         out.mkdir(parents=True, exist_ok=True)
         (out / "checkpoints.json").write_text(
-            json.dumps(checkpoint_report(results), indent=2) + "\n", encoding="utf-8"
+            json.dumps(checkpoint_report(results), indent=2) + "\n", encoding="utf-8", newline="\n"
         )
     json_path, _ = write_report(sc, out)
     decision, reasons = evaluate(sc)

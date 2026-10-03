@@ -158,8 +158,11 @@ async def _supervise(tasks: list[asyncio.Task[None]], stop: asyncio.Event) -> No
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
-    if sys.platform == "win32":  # no add_signal_handler; KeyboardInterrupt ends asyncio.run
-        return
     loop = asyncio.get_running_loop()
+    if sys.platform == "win32":
+        # No add_signal_handler on Windows. Ctrl+C still ends asyncio.run with KeyboardInterrupt;
+        # CTRL_BREAK_EVENT (SIGBREAK) is the graceful stop a supervisor or test harness can send.
+        signal.signal(signal.SIGBREAK, lambda _sig, _frame: loop.call_soon_threadsafe(stop.set))
+        return
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)

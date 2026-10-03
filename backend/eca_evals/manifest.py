@@ -73,7 +73,7 @@ def build_manifest(
 
 
 def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
-    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
