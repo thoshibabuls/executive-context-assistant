@@ -35,7 +35,7 @@ from eca.platform.storage import LocalObjectStorage, UploadSigner
 from eca.platform.uow import UnitOfWorkFactory
 from eca.worker.composition import production_registry
 from tests.conftest import TempDatabase
-from tests.fake_ai import FakeProvider, fake_ai_client
+from tests.fake_ai import FakeProvider, fake_ai_client, replay_ai_client
 
 SIGNING_SECRET = "test-storage-signing-secret-0123456789"  # test-only value
 
@@ -58,6 +58,10 @@ class ApiHarness:
     client: TestClient
     objects: Path
     fake_ai: FakeProvider = field(default_factory=FakeProvider)
+    # AI mode of the inline worker: the fake provider ("live"), the fake provider writing cassettes
+    # ("record"), or cassettes only ("replay"; a miss raises CassetteMiss).
+    ai_mode: str = "live"
+    cassette_dir: Path | None = None
 
     def request(self, user: ApiUser, method: str, url: str, **kwargs: Any) -> Any:
         headers = {**user.headers(), **kwargs.pop("headers", {})}
@@ -75,7 +79,7 @@ class ApiHarness:
 
     def drain(self) -> int:
         """Run every pending event through the production handlers (the worker's job)."""
-        return asyncio.run(_drain(self.db, self.objects, self.fake_ai))
+        return asyncio.run(_drain(self))
 
     def rows(self, query: str, params: Sequence[Any] = ()) -> list[tuple[Any, ...]]:
         with psycopg.connect(self.db.admin_url) as conn:
@@ -128,15 +132,17 @@ async def _new_person(db: TempDatabase, user_id: UUID, email: str, name: str) ->
         await engine.dispose()
 
 
-async def _drain(db: TempDatabase, objects: Path, fake: FakeProvider) -> int:
-    engine = create_engine(db.worker_url, pool_size=4, max_overflow=0)
+async def _drain(h: ApiHarness) -> int:
+    engine = create_engine(h.db.worker_url, pool_size=4, max_overflow=0)
     try:
         factory = UnitOfWorkFactory(create_session_factory(engine))
-        resources = Resources.of(
-            LocalObjectStorage(objects, storage_signer()),
-            fake_ai_client(fake, uow_factory=factory),
-            SystemClock(),
-        )
+        if h.ai_mode == "replay":
+            assert h.cassette_dir is not None
+            client = replay_ai_client(h.cassette_dir, uow_factory=factory)
+        else:
+            record_to = h.cassette_dir if h.ai_mode == "record" else None
+            client = fake_ai_client(h.fake_ai, uow_factory=factory, cassette_dir=record_to)
+        resources = Resources.of(LocalObjectStorage(h.objects, storage_signer()), client, SystemClock())
         return await InlineExecutor(factory, production_registry(), resources).drain()
     finally:
         await engine.dispose()
@@ -146,7 +152,7 @@ async def _drain(db: TempDatabase, objects: Path, fake: FakeProvider) -> int:
 def api_harness(db: TempDatabase, tmp_path: Path) -> Iterator[ApiHarness]:
     objects = tmp_path / "objects"
     cassettes = tmp_path / "cassettes"
-    cassettes.mkdir(exist_ok=True)
+    cassettes.mkdir(parents=True, exist_ok=True)
     settings = Settings(  # type: ignore[call-arg]
         _env_file=None,
         api_env="test",

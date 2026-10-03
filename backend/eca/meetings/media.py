@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -55,26 +56,29 @@ def job_dir(base: str | None) -> Iterator[Path]:
         shutil.rmtree(path, ignore_errors=True)
 
 
-async def _run(args: list[str], *, timeout_s: float) -> bytes:
+def _run_sync(args: list[str], timeout_s: float) -> bytes:
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+        proc = subprocess.run(  # noqa: S603 - fixed argument lists, no shell
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout_s,
+            check=False,
         )
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, PermissionError) as exc:
         raise MediaError("media_tool_missing", retryable=True) from exc
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-    except TimeoutError as exc:
-        with contextlib.suppress(ProcessLookupError):
-            proc.kill()
-        await proc.wait()
+    except subprocess.TimeoutExpired as exc:  # subprocess.run has already killed the process
         raise MediaError("media_timeout", retryable=True) from exc
     if proc.returncode != 0:
         raise MediaError("unreadable", retryable=False)
-    return out
+    return proc.stdout
+
+
+async def _run(args: list[str], *, timeout_s: float) -> bytes:
+    """Run a media tool in a thread. ``asyncio.create_subprocess_exec`` is not used because the
+    selector event loop (required by psycopg on Windows) cannot start subprocesses there."""
+    return await asyncio.to_thread(_run_sync, args, timeout_s)
 
 
 def _nonempty(path: Path) -> bool:
@@ -111,11 +115,13 @@ async def probe(tools: MediaTools, path: Path) -> Probe:
 
 
 def extract_args(tools: MediaTools, source: Path, target: Path) -> list[str]:
-    """Mono 16 kHz Opus, first audio stream only, no video, subtitles or data streams."""
+    """Mono 16 kHz Opus, first audio stream only, no video, subtitles or data streams; bit-exact,
+    so the same input always gives the same bytes."""
     return [
         tools.ffmpeg, "-nostdin", "-y", "-i", str(source),
         "-map", "0:a:0", "-vn", "-sn", "-dn",
         "-ac", "1", "-ar", "16000", "-c:a", "libopus", "-b:a", "24k", "-application", "voip",
+        "-fflags", "+bitexact", "-flags:a", "+bitexact",  # reproducible output (AI-09 cassette key)
         str(target),
     ]  # fmt: skip
 

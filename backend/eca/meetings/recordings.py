@@ -123,10 +123,14 @@ def parse_sha256(value: str) -> bytes:
     return bytes.fromhex(text)
 
 
-def storage_key(user_id: UUID, recording_id: UUID, name: str | None = None) -> str:
-    """Object keys hold IDs only, never a file name the user chose (§11.4)."""
-    base = f"recordings/{user_id}/{recording_id}"
-    return f"{base}/{name}" if name else base
+RAW_OBJECT = "original"  # the uploaded file; the prepared audio is "audio.ogg" next to it
+
+
+def storage_key(user_id: UUID, recording_id: UUID, name: str = RAW_OBJECT) -> str:
+    """Object keys hold IDs only, never a file name the user chose (§11.4). Every object of a
+    recording is a named object under ``recordings/<user_id>/<recording_id>/``: a key that is
+    itself the prefix of another key cannot be stored on a file system (local adapter)."""
+    return f"recordings/{user_id}/{recording_id}/{name}"
 
 
 def _view(r: Any) -> RecordingView:

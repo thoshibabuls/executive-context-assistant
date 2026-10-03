@@ -148,3 +148,15 @@ def fake_ai_client(
         cassettes=CassetteStore(cassette_dir) if cassette_dir is not None else None,
         meter=Meter(uow_factory) if uow_factory is not None else None,
     )
+
+
+def replay_ai_client(cassette_dir: Path, *, uow_factory: UnitOfWorkFactory | None = None) -> AIClient:
+    """An ``AIClient`` in replay mode over recorded cassettes: no provider, no network."""
+    config = load_ai_config()
+    return AIClient(
+        registry=config.registry,
+        prices=config.prices,
+        mode="replay",
+        cassettes=CassetteStore(cassette_dir),
+        meter=Meter(uow_factory) if uow_factory is not None else None,
+    )
