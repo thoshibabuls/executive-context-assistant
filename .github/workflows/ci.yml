@@ -64,6 +64,23 @@ jobs:
       - name: tests (unit, api, integration, reliability)
         run: pytest
 
+  image:
+    # The deployment image (TECHNICAL_DESIGN.md 5, 16.1): builds, has ffmpeg and ffprobe, and every
+    # entry point imports. No registry push: where it runs is decided with Q1.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: docker build -t eca:ci .
+      - name: smoke
+        run: |
+          docker run --rm eca:ci ffmpeg -hide_banner -version
+          docker run --rm eca:ci ffprobe -hide_banner -version
+          docker run --rm eca:ci ffmpeg -hide_banner -encoders | grep -q libopus
+          docker run --rm eca:ci python -c "import eca.api.app, eca.worker.composition; print('entry points import')"
+          docker run --rm eca:ci alembic heads
+          docker run --rm eca:ci sh -c 'test ! -e /app/backend/tests && test ! -e /app/.env && id -u'
+
   secrets:
     runs-on: ubuntu-latest
     steps:
