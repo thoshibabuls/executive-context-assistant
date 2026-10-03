@@ -10,6 +10,10 @@ Runs as the worker role (``API_WORKER_DATABASE_URL``).
   (TECHNICAL_DESIGN.md §15.4). Nothing is written to disk; needs no database.
 - ``cost --date YYYY-MM-DD`` (Phase 3): AI cost per user (hashed) and role for one UTC day, from
   ``ai_cost_rollups`` (AI_COST_MODEL.md §8).
+- ``priority-fit --pairs FILE [--split dev]`` (Phase 3): fit the global priority weights offline on
+  labelled preference pairs (``priority_pairs.jsonl``, AI_EVALUATION.md §4.5) and print a proposed
+  ``weights`` block with its pairwise agreement (TECHNICAL_DESIGN.md §12.8). Writes nothing:
+  applying it to ``config/priority.yaml`` is a major change gated by E5. Needs no database.
 """
 
 from __future__ import annotations
@@ -17,12 +21,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime
+import json
 from collections.abc import Sequence
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from eca.attention import generate_keys
+from eca.attention import GLOBAL_BOUNDS, Pair, PriorityConfig, fit_multipliers, generate_keys
 from eca.intelligence import build_ai_client, cost_by_user
 from eca.platform.config import Settings, get_settings
 from eca.platform.db import create_engine, create_session_factory
@@ -44,6 +50,9 @@ def _parser() -> argparse.ArgumentParser:
     reembed.add_argument("--limit", type=int, default=500)
     reembed.add_argument("--dry-run", action="store_true")
     ops.add_parser("vapid-keys", help="print a new Web Push VAPID key pair (store it as secrets)")
+    fit = ops.add_parser("priority-fit", help="fit global priority weights on labelled pairs (prints only)")
+    fit.add_argument("--pairs", type=Path, required=True)
+    fit.add_argument("--split", default="dev")
     cost = ops.add_parser("cost", help="AI cost per user (hashed) and role for one UTC day")
     cost.add_argument("--date", type=datetime.date.fromisoformat, required=True)
     return parser
@@ -83,6 +92,29 @@ async def reembed(settings: Settings, user_id: UUID, limit: int, dry_run: bool) 
     return f"{report.stale} chunk(s) with another embedding model; re-embedded {report.embedded}"
 
 
+def priority_fit(path: Path, split: str) -> str:
+    """Global weights from labelled pairs: ``{"split", "a": {"features"}, "b": {...}, "preferred"}``."""
+    pairs = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if row.get("split") != split:
+            continue
+        a, b = row["a"]["features"], row["b"]["features"]
+        pairs.append(Pair(a, b) if row["preferred"] == "a" else Pair(b, a))
+    cfg = PriorityConfig.load()
+    result = fit_multipliers(cfg.weights, pairs, bounds=GLOBAL_BOUNDS)
+    raw = {k: cfg.weights[k] * result.multipliers.get(k, 1.0) for k in cfg.weights}
+    total = sum(raw.values()) or 1.0
+    lines = [
+        f"# {len(pairs)} pair(s) of split {split!r}; pairwise agreement after the fit: {result.agreement:.3f}"
+    ]
+    lines.append("weights:")
+    lines += [f"  {k}: {v / total:.4f}" for k, v in sorted(raw.items())]
+    return "\n".join(lines)
+
+
 async def cost_report(settings: Settings, day: datetime.date) -> str:
     factory, engine = _factory(settings)
     try:
@@ -102,6 +134,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"WEB_PUSH_VAPID_PUBLIC_KEY={public}")
         print(f"WEB_PUSH_VAPID_PRIVATE_KEY={private}")
         print("# Store both in the secret manager; never commit them. Set WEB_PUSH_VAPID_SUBJECT too.")
+        return 0
+    if args.area == "priority-fit":
+        print(priority_fit(args.pairs, args.split))
         return 0
     if args.area == "cost":
         print(asyncio.run(cost_report(get_settings(), args.date)))

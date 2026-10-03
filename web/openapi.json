@@ -476,6 +476,22 @@
       ],
       "title": "Owner Person Id"
      },
+     "priority_override": {
+      "anyOf": [
+       {
+        "enum": [
+         -1,
+         0,
+         1
+        ],
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Priority Override"
+     },
      "project_hint": {
       "anyOf": [
        {

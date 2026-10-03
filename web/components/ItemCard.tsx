@@ -64,6 +64,17 @@ export function ItemCard({
       return name === "reject" || name === "complete" ? null : next;
     });
 
+  // Your priority wins over the computed score and teaches the per-user weights (slice 3.5).
+  const setPriority = (override: 1 | -1 | 0) =>
+    run(async () =>
+      unwrap<WorkItem>(
+        await api.PATCH("/api/v1/work-items/{item_id}", {
+          params: { path: { item_id: item.id }, header: { "If-Match": `W/"${item.version}"` } },
+          body: { priority_override: override },
+        }),
+      ),
+    );
+
   const save = () =>
     run(async () => {
       const result = await api.PATCH("/api/v1/work-items/{item_id}", {
@@ -117,6 +128,8 @@ export function ItemCard({
         )}
         {!editing && <button onClick={() => setEditing(true)} disabled={busy}>Edit</button>}
         <button onClick={() => runCommand("complete")} disabled={busy}>Done</button>
+        <button onClick={() => setPriority(1)} disabled={busy} title="Pin this item high">More important</button>
+        <button onClick={() => setPriority(-1)} disabled={busy} title="Pin this item low">Less important</button>
       </div>
       {error && <p className="error">{error}</p>}
     </li>

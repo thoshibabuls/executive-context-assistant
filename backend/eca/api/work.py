@@ -17,7 +17,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from eca import work
+from eca import attention, work
 from eca.api.common import (
     Cursors,
     Factory,
@@ -33,6 +33,7 @@ from eca.api.common import (
     parse_if_match,
     request_key,
 )
+from eca.platform.errors import ValidationFailed
 from eca.platform.uow import UnitOfWork
 
 router = APIRouter(prefix="/api/v1")
@@ -192,6 +193,8 @@ class PatchItem(BaseModel):
     due_text: str | None = None
     project_hint: str | None = None
     notes: str | None = None
+    # User priority (slice 3.5): 1 pins high, -1 pins low, 0/null clears; records preference pairs.
+    priority_override: Literal[-1, 0, 1] | None = None
 
 
 @router.patch("/work-items/{item_id}")
@@ -205,16 +208,37 @@ async def patch_work_item(
 ) -> JSONResponse:
     changes = body.model_dump(exclude_unset=True)
     base_version = changes.pop("base_version", None)
+    has_override = "priority_override" in changes
+    override = changes.pop("priority_override", None)
+    if not changes and not has_override:
+        raise ValidationFailed("no fields to change")
+    at = now()
     async with factory(user_id=user.user_id) as uow:
-        await work.edit_item(
-            uow,
-            item_id,
-            changes,
-            request_key=request_key(idempotency_key),
-            at=now(),
-            if_match=parse_if_match(if_match),
-            base_version=base_version,
-        )
+        expected = parse_if_match(if_match)
+        if changes:
+            result = await work.edit_item(
+                uow,
+                item_id,
+                changes,
+                request_key=request_key(idempotency_key),
+                at=at,
+                if_match=expected,
+                base_version=base_version,
+            )
+            expected = result.version
+        if has_override:
+            # Not a folded field: a USER-AUTHORED column with its own user event (TECHNICAL_DESIGN.md §12.8).
+            await work.set_item_priority_override(
+                uow, item_id, override, if_match=expected, request_key=request_key(idempotency_key), at=at
+            )
+            await attention.record_override_pairs(
+                uow,
+                attention.priority_config(),
+                entity_type="work_item",
+                entity_id=item_id,
+                override=override,
+                now=at,
+            )
         return await _detail_response(uow, item_id)
 
 

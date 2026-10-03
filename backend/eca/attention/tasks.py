@@ -27,6 +27,7 @@ from sqlalchemy import text
 
 from eca.attention.briefing import on_briefing_due, schedule_all
 from eca.attention.events import BRIEFING_DUE, REMINDER_DUE, BriefingDue, ReminderDue
+from eca.attention.learning import fit_all
 from eca.attention.priority import PriorityConfig
 from eca.attention.profiles import refresh_all, refresh_profiles
 from eca.attention.push import send_push
@@ -50,6 +51,7 @@ from eca.work import WORK_ITEM_CHANGED, WorkItemChanged
 
 PRIORITY_SWEEP_TASK = "eca.attention.priority_sweep"
 PROFILES_TASK = "eca.attention.relationship_profiles"
+PRIORITY_FIT_TASK = "eca.attention.priority_fit"
 REMINDER_SWEEP_TASK = "eca.attention.reminder_sweep"
 BRIEFING_SCHEDULE_TASK = "eca.attention.briefing_schedule"
 _REM_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtextextended('rem:' || :entity, 0))")
@@ -173,6 +175,10 @@ async def _reminders(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> 
     await reminder_sweep_all(uow_factory, now=now)
 
 
+async def _fit(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> None:
+    await fit_all(uow_factory, priority_config(), now=now)
+
+
 async def _profiles(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> None:
     await refresh_all(uow_factory, now=now)
 
@@ -203,6 +209,13 @@ def periodic_tasks() -> list[PeriodicTaskSpec]:
             cron="*/15 * * * *",
             queue="schedule",
             run=_briefings,
+        ),
+        PeriodicTaskSpec(
+            name=PRIORITY_FIT_TASK,
+            periodic_id="priority_fit",
+            cron="50 3 * * *",
+            queue="schedule",
+            run=_fit,
         ),
         PeriodicTaskSpec(
             name=PROFILES_TASK,

@@ -31,7 +31,13 @@ from eca.work.pipeline import (
     ExtractionRetry,
     extract_source_item,
 )
-from eca.work.priority import ItemPriorityInput, clear_closed_priority, priority_candidates, set_item_priority
+from eca.work.priority import (
+    ItemPriorityInput,
+    clear_closed_priority,
+    priority_candidates,
+    set_item_priority,
+    set_item_priority_override,
+)
 from eca.work.purge import (
     REDACTED,
     delete_unreferenced_evidence,
@@ -194,6 +200,7 @@ __all__ = [
     "search_decisions",
     "search_items",
     "set_item_priority",
+    "set_item_priority_override",
     "set_lifecycle",
     "source_item_stats",
     "sources_still_referenced",

@@ -185,6 +185,14 @@ async def patch_conversation(
         conv = await communication.set_priority_override(
             uow, conversation_id, body.priority_override, if_match=parse_if_match(if_match)
         )
+        await attention.record_override_pairs(  # preference pairs for fitting (TECHNICAL_DESIGN.md §12.8)
+            uow,
+            attention.priority_config(),
+            entity_type="conversation",
+            entity_id=conversation_id,
+            override=body.priority_override,
+            now=now(),
+        )
     return JSONResponse(conversation_json(conv), headers={"ETag": etag(conv.version)})
 
 

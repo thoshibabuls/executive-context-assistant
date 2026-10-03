@@ -1110,6 +1110,8 @@ export interface components {
             notes?: string | null;
             /** Owner Person Id */
             owner_person_id?: string | null;
+            /** Priority Override */
+            priority_override?: (-1 | 0 | 1) | null;
             /** Project Hint */
             project_hint?: string | null;
             /** Title */

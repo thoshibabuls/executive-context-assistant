@@ -1,5 +1,5 @@
-"""Tables owned by ``attention`` (BACKEND_DESIGN.md §5.1, §17.6). Mirrors migrations 0019, 0020
-and 0022."""
+"""Tables owned by ``attention`` (BACKEND_DESIGN.md §5.1, §17.6). Mirrors migrations 0019, 0020,
+0022 and 0023."""
 
 from __future__ import annotations
 
@@ -92,4 +92,31 @@ briefings_table = Table(
     Column("content", JSONB, nullable=False),
     Column("generated_at", DateTime(timezone=True), nullable=False),
     Column("trigger", Text, nullable=False),
+)
+
+priority_pairs_table = Table(
+    "priority_pairs",
+    metadata,
+    Column("id", PG_UUID(as_uuid=True), primary_key=True),
+    Column("user_id", PG_UUID(as_uuid=True), nullable=False),
+    Column("preferred_type", Text, nullable=False),
+    Column("preferred_id", PG_UUID(as_uuid=True), nullable=False),
+    Column("other_type", Text, nullable=False),
+    Column("other_id", PG_UUID(as_uuid=True), nullable=False),
+    Column("preferred_features", JSONB, nullable=False),
+    Column("other_features", JSONB, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("config_version", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True)),
+)
+
+user_priority_weights_table = Table(
+    "user_priority_weights",
+    metadata,
+    Column("user_id", PG_UUID(as_uuid=True), primary_key=True),
+    Column("multipliers", JSONB, nullable=False),
+    Column("pairs_used", Integer, nullable=False),
+    Column("agreement", REAL, nullable=False),
+    Column("config_version", Text, nullable=False),
+    Column("fitted_at", DateTime(timezone=True), nullable=False),
 )

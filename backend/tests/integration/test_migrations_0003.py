@@ -36,7 +36,7 @@ def test_chain_is_linear_and_ordered() -> None:
     script = ScriptDirectory.from_config(alembic_config("postgresql://unused/unused"))
     chain = [rev.revision for rev in reversed(list(script.walk_revisions()))]
     assert chain == [f"{n:04d}" for n in range(1, 18)]
-    assert script.get_heads() == ["0017"]
+    assert script.get_heads() == ["0023"]
 
 
 def test_each_revision_up_down_up(fresh_db: TempDatabase) -> None:
@@ -93,6 +93,12 @@ def test_each_revision_up_down_up(fresh_db: TempDatabase) -> None:
     expected["0015"] = expected["0014"] | {"projects", "project_members"}
     expected["0016"] = expected["0015"]
     expected["0017"] = expected["0016"] | {"chat_sessions", "chat_messages"}
+    expected["0018"] = expected["0017"]
+    expected["0019"] = expected["0018"] | {"reminders", "notifications"}
+    expected["0020"] = expected["0019"] | {"push_subscriptions"}
+    expected["0021"] = expected["0020"]
+    expected["0022"] = expected["0021"] | {"briefings"}
+    expected["0023"] = expected["0022"] | {"priority_pairs", "user_priority_weights"}
     for rev, tables in expected.items():
         command.upgrade(cfg, rev)
         assert _revision(fresh_db.admin_url) == rev
@@ -110,7 +116,7 @@ def test_each_revision_up_down_up(fresh_db: TempDatabase) -> None:
         ).fetchall()
     assert leftovers == [(0,), (0,), (0,)]
     command.upgrade(cfg, "head")
-    assert _revision(fresh_db.admin_url) == "0017"
+    assert _revision(fresh_db.admin_url) == "0023"
 
 
 def test_outbox_schema_matches_design(migrated_db: TempDatabase) -> None:
