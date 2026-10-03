@@ -73,6 +73,7 @@ from eca.work.read import (
     project_hint_sources,
     search_decisions,
     search_items,
+    source_item_stats,
     user_activity_since,
 )
 from eca.work.recompute import RecomputeReport, reapply_all, refold_all
@@ -194,6 +195,7 @@ __all__ = [
     "search_items",
     "set_item_priority",
     "set_lifecycle",
+    "source_item_stats",
     "sources_still_referenced",
     "sweep_all",
     "sweep_user",

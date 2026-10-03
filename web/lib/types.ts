@@ -200,3 +200,40 @@ export type Reminder = {
 };
 
 export type AppNotification = { id: string; created_at: string; read_at: string | null; reminder: Reminder };
+
+// Daily briefing (slice 3.2): deterministic sections, no AI call. Entries keep their data class.
+export type BriefingEntry = {
+  kind: string;
+  id: string;
+  title: string;
+  person: string | null;
+  due_at?: string | null;
+  due_local?: string | null;
+  reasons: (string | null)[];
+  data_class: string;
+  label: string;
+  source_item_ids: string[];
+};
+
+export type Briefing = {
+  date: string;
+  timezone: string;
+  headline: string;
+  generated_at: string;
+  trigger: "schedule" | "on_demand";
+  updated_since_briefing: { material_changes: number; since: string } | null;
+  sections: {
+    priorities: BriefingEntry[];
+    meetings: { id: string; title: string; starts_at: string; local_time: string }[];
+    waiting_on: BriefingEntry[];
+    deadlines: BriefingEntry[];
+    people: { id: string; name: string | null; reason: string }[];
+    communication: {
+      received: number;
+      require_attention: number;
+      with_action_items: number;
+      with_deadlines: number;
+      respond_today: number;
+    };
+  };
+};

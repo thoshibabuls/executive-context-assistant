@@ -89,4 +89,5 @@ def production_periodic_tasks() -> list[PeriodicTaskSpec]:
         *eca.work.periodic_tasks(),
         *eca.projects.periodic_tasks(),
         *eca.privacy.periodic_tasks(),
+        *eca.retrieval.periodic_tasks(),
     ]

@@ -345,3 +345,38 @@ async def audit_budget_caps(
                 written += 1
                 log.error("ai_global_budget", action=action, date=date)
     return written
+
+
+@dataclass(frozen=True)
+class CostRow:
+    user_ref: str  # hashed user ID (BACKEND_DESIGN.md §19); "system" for calls without a user
+    role: str
+    calls: int
+    est_cost_usd: Decimal
+
+
+async def cost_by_user(uow: UnitOfWork, *, day: datetime.date) -> list[CostRow]:
+    """Cost per user and role for one UTC day from the roll-ups (AI_COST_MODEL.md §8). Worker role:
+    every user's rows; IDs are hashed, no content."""
+    r = ai_cost_rollups_table
+    start = datetime.datetime.combine(day, datetime.time(), tzinfo=datetime.UTC)
+    rows = await uow.session.execute(
+        select(
+            r.c.user_id,
+            r.c.role,
+            func.sum(r.c.calls).label("calls"),
+            func.sum(r.c.est_cost_usd).label("cost"),
+        )
+        .where(r.c.bucket_start >= start, r.c.bucket_start < start + datetime.timedelta(days=1))
+        .group_by(r.c.user_id, r.c.role)
+        .order_by(func.sum(r.c.est_cost_usd).desc())
+    )
+    return [
+        CostRow(
+            _user_ref(row.user_id) if row.user_id is not None else "system",
+            row.role,
+            int(row.calls),
+            Decimal(str(row.cost)),
+        )
+        for row in rows
+    ]

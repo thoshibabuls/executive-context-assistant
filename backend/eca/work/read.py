@@ -520,3 +520,31 @@ async def user_activity_since(
         .group_by(c.c.entity_id)
     )
     return {r.entity_id for r in rows if r.at > since[r.entity_id]}
+
+
+async def source_item_stats(uow: UnitOfWork, source_item_ids: Sequence[UUID]) -> tuple[set[UUID], set[UUID]]:
+    """(sources with at least one live, non-rejected work item; those with an item that has a
+    deadline) — the daily email summary counts (PRD §12)."""
+    ids = list(source_item_ids)
+    if not ids:
+        return set(), set()
+    ie, ev, t = item_evidence_table, evidence_table, work_items_table
+    rows = await uow.session.execute(
+        select(ev.c.source_item_id, t.c.due_at)
+        .join(ie, ie.c.evidence_id == ev.c.id)
+        .join(t, (t.c.id == ie.c.item_id) & (ie.c.item_type == "work_item"))
+        .where(
+            ev.c.user_id == uow.user_id,
+            ev.c.source_item_id.in_(ids),
+            t.c.verification_status != "rejected",
+            t.c.merged_into_id.is_(None),
+            t.c.deleted_at.is_(None),
+        )
+    )
+    with_items: set[UUID] = set()
+    with_deadlines: set[UUID] = set()
+    for r in rows:
+        with_items.add(r.source_item_id)
+        if r.due_at is not None:
+            with_deadlines.add(r.source_item_id)
+    return with_items, with_deadlines

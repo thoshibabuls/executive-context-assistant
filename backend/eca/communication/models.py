@@ -1,4 +1,4 @@
-"""Tables owned by ``communication`` (BACKEND_DESIGN.md §5.1). Mirrors migration 0007."""
+"""Tables owned by ``communication`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0007 and 0021."""
 
 from __future__ import annotations
 
@@ -26,6 +26,17 @@ conversations_table = Table(
     Column("needs_reply_source", Text),
     Column("handled_by_user_at", DateTime(timezone=True)),
     Column("summary", Text),
+    Column("summary_through_message_id", PG_UUID(as_uuid=True)),
+    Column("summary_key_points", JSONB, nullable=False),
+    Column("summary_method", Text),
+    Column("summary_model", Text),
+    Column("summary_prompt_version", Text),
+    Column("summary_derived_at", DateTime(timezone=True)),
+    Column("summary_ai_call_ids", ARRAY(PG_UUID(as_uuid=True)), nullable=False),
+    Column("summary_covered_source_ids", ARRAY(PG_UUID(as_uuid=True)), nullable=False),
+    Column("summary_pending_through", PG_UUID(as_uuid=True)),
+    Column("summary_failed_through", PG_UUID(as_uuid=True)),
+    Column("summary_requested_at", DateTime(timezone=True)),
     Column("priority_score", REAL),
     Column("priority_reasons", JSONB),
     Column("priority_override", SmallInteger),

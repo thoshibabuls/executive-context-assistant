@@ -15,7 +15,7 @@ import secrets
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import Column, DateTime, MetaData, Table, Text, insert, select, text, update
+from sqlalchemy import Column, DateTime, MetaData, Table, Text, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import BYTEA
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
@@ -133,3 +133,12 @@ async def revoke_session(uow: UnitOfWork, session_id: UUID, *, now: datetime.dat
 async def revoke_all_sessions(uow: UnitOfWork, *, now: datetime.datetime) -> None:
     t = auth_sessions_table
     await uow.session.execute(update(t).where(t.c.revoked_at.is_(None)).values(revoked_at=now))
+
+
+async def last_seen_at(uow: UnitOfWork) -> datetime.datetime | None:
+    """The current user's latest session activity (slice 3.2: the briefing runs for active users)."""
+    t = auth_sessions_table
+    value = (
+        await uow.session.execute(select(func.max(t.c.last_seen_at)).where(t.c.user_id == uow.user_id))
+    ).scalar_one_or_none()
+    return value if isinstance(value, datetime.datetime) else None

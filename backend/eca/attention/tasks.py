@@ -25,7 +25,8 @@ from uuid import UUID
 
 from sqlalchemy import text
 
-from eca.attention.events import REMINDER_DUE, ReminderDue
+from eca.attention.briefing import on_briefing_due, schedule_all
+from eca.attention.events import BRIEFING_DUE, REMINDER_DUE, BriefingDue, ReminderDue
 from eca.attention.priority import PriorityConfig
 from eca.attention.profiles import refresh_all, refresh_profiles
 from eca.attention.push import send_push
@@ -50,6 +51,7 @@ from eca.work import WORK_ITEM_CHANGED, WorkItemChanged
 PRIORITY_SWEEP_TASK = "eca.attention.priority_sweep"
 PROFILES_TASK = "eca.attention.relationship_profiles"
 REMINDER_SWEEP_TASK = "eca.attention.reminder_sweep"
+BRIEFING_SCHEDULE_TASK = "eca.attention.briefing_schedule"
 _REM_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtextextended('rem:' || :entity, 0))")
 PROFILE_PARTICIPANTS = 10
 
@@ -155,6 +157,18 @@ async def on_reminder_due(ctx: HandlerContext) -> None:
     )
 
 
+@handles(BRIEFING_DUE, name="attention.daily_briefing")
+async def on_daily_briefing(ctx: HandlerContext) -> None:
+    """``daily_briefing``: deterministic, once per user-day (lock ``brief:{user}:{date}``)."""
+    payload = ctx.payload
+    assert isinstance(payload, BriefingDue)
+    await on_briefing_due(ctx.tx, payload.date, now=ctx.resources.get(Clock).now())
+
+
+async def _briefings(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> None:
+    await schedule_all(uow_factory, now=now)
+
+
 async def _reminders(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> None:
     await reminder_sweep_all(uow_factory, now=now)
 
@@ -182,6 +196,13 @@ def periodic_tasks() -> list[PeriodicTaskSpec]:
             cron="*/5 * * * *",
             queue="schedule",
             run=_reminders,
+        ),
+        PeriodicTaskSpec(
+            name=BRIEFING_SCHEDULE_TASK,
+            periodic_id="briefing_schedule",
+            cron="*/15 * * * *",
+            queue="schedule",
+            run=_briefings,
         ),
         PeriodicTaskSpec(
             name=PROFILES_TASK,

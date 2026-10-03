@@ -278,3 +278,33 @@ async def message_participant_ids(uow: UnitOfWork, message_id: UUID) -> list[UUI
         .order_by(mp.c.person_id)
     )
     return [r.person_id for r in rows]
+
+
+@dataclass(frozen=True)
+class MailCounts:
+    """Daily email summary inputs (PRD §12; AI_EVALUATION.md E12 "daily email summary counts")."""
+
+    received: int  # inbound messages in the window
+    require_attention: int  # of those, in threads now awaiting the user's reply
+    inbound_source_ids: tuple[UUID, ...]
+
+
+async def mail_counts(uow: UnitOfWork, *, start: datetime.datetime, end: datetime.datetime) -> MailCounts:
+    c, m = conversations_table, messages_table
+    rows = (
+        await uow.session.execute(
+            select(m.c.source_item_id, c.c.awaiting, c.c.needs_reply, c.c.handled_by_user_at)
+            .join(c, c.c.id == m.c.conversation_id)
+            .where(
+                m.c.user_id == uow.user_id,
+                m.c.direction == "inbound",
+                m.c.sent_at >= start,
+                m.c.sent_at < end,
+                m.c.deleted_at.is_(None),
+            )
+        )
+    ).all()
+    attention = sum(
+        1 for r in rows if r.awaiting == "user" and r.needs_reply and r.handled_by_user_at is None
+    )
+    return MailCounts(len(rows), attention, tuple(r.source_item_id for r in rows))

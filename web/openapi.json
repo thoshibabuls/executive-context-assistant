@@ -945,6 +945,51 @@
     "summary": "Logout"
    }
   },
+  "/api/v1/briefings/{date}": {
+   "get": {
+    "description": "The deterministic daily briefing (no AI call); today's is generated on demand.",
+    "operationId": "get_briefing_api_v1_briefings__date__get",
+    "parameters": [
+     {
+      "description": "Local calendar date (YYYY-MM-DD) in your timezone",
+      "in": "path",
+      "name": "date",
+      "required": true,
+      "schema": {
+       "description": "Local calendar date (YYYY-MM-DD) in your timezone",
+       "format": "date",
+       "title": "Date",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Briefing Api V1 Briefings  Date  Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Briefing"
+   }
+  },
   "/api/v1/changes": {
    "get": {
     "operationId": "get_changes_api_v1_changes_get",
@@ -1773,6 +1818,45 @@
      }
     },
     "summary": "Mark Handled"
+   }
+  },
+  "/api/v1/conversations/{conversation_id}/summary": {
+   "post": {
+    "description": "AI-03 on request (BACKEND_DESIGN.md \u00a716.8): 202 when queued, 200 with the stored summary\nwhen it already covers the newest relevant message, 429 at the hard budget cap.",
+    "operationId": "request_summary_api_v1_conversations__conversation_id__summary_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "conversation_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Conversation Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Request Summary"
    }
   },
   "/api/v1/data-summary": {

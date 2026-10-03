@@ -55,6 +55,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/briefings/{date}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Briefing
+         * @description The deterministic daily briefing (no AI call); today's is generated on demand.
+         */
+        get: operations["get_briefing_api_v1_briefings__date__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/changes": {
         parameters: {
             query?: never;
@@ -274,6 +294,27 @@ export interface paths {
         put?: never;
         /** Mark Handled */
         post: operations["mark_handled_api_v1_conversations__conversation_id__mark_handled_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conversations/{conversation_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Summary
+         * @description AI-03 on request (BACKEND_DESIGN.md §16.8): 202 when queued, 200 with the stored summary
+         *     when it already covers the newest relevant message, 429 at the hard budget cap.
+         */
+        post: operations["request_summary_api_v1_conversations__conversation_id__summary_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1210,6 +1251,40 @@ export interface operations {
             };
         };
     };
+    get_briefing_api_v1_briefings__date__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Local calendar date (YYYY-MM-DD) in your timezone */
+                date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_changes_api_v1_changes_get: {
         parameters: {
             query?: {
@@ -1757,6 +1832,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_summary_api_v1_conversations__conversation_id__summary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
             };
             /** @description Validation Error */
             422: {

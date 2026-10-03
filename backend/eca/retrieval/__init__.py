@@ -18,6 +18,7 @@ from eca.retrieval.cards import delimit, fmt_date
 from eca.retrieval.changes import ChangeSet, DayView, NetChange, changes_since, day_view, item_net_change
 from eca.retrieval.chunking import ChunkDraft, calendar_chunks, email_chunks, estimate_tokens, split_text
 from eca.retrieval.coverage import Coverage, SourceCoverage, coverage_sentence
+from eca.retrieval.events import THREAD_SUMMARY_DUE, ThreadSummaryDue
 from eca.retrieval.feed import ChangeEntry, ChangeFeedPage, DayViewPage, change_feed, day_view_for
 from eca.retrieval.indexing import (
     IndexReport,
@@ -49,7 +50,14 @@ from eca.retrieval.purge import purge_user
 from eca.retrieval.registry import all_retrievers
 from eca.retrieval.retrievers import PersonContextPage, person_context_for
 from eca.retrieval.search import ChunkHit, SearchFilters, hybrid_search, ts_terms
-from eca.retrieval.tasks import INDEX_MEETING_HANDLER, INDEX_MESSAGE_HANDLER, INDEX_REMOVED_HANDLER
+from eca.retrieval.summaries import request_summary
+from eca.retrieval.tasks import (
+    INDEX_MEETING_HANDLER,
+    INDEX_MESSAGE_HANDLER,
+    INDEX_REMOVED_HANDLER,
+    THREAD_SUMMARY_HANDLER,
+    periodic_tasks,
+)
 from eca.retrieval.temporal import TimeWindow
 from eca.retrieval.topics import (
     TOPIC_LABEL,
@@ -72,6 +80,8 @@ __all__ = [
     "INTENT_SCENARIO",
     "INTENT_TIER",
     "LIST_INTENTS",
+    "THREAD_SUMMARY_DUE",
+    "THREAD_SUMMARY_HANDLER",
     "TOPIC_LABEL",
     "AliasHit",
     "AliasMatcher",
@@ -101,6 +111,7 @@ __all__ = [
     "SessionScope",
     "SessionState",
     "SourceCoverage",
+    "ThreadSummaryDue",
     "TimeWindow",
     "TopicGroup",
     "Turn",
@@ -125,6 +136,7 @@ __all__ = [
     "meeting_target",
     "message_target",
     "needs_discovery",
+    "periodic_tasks",
     "person_context_for",
     "plan_by_rules",
     "plan_question",
@@ -136,6 +148,7 @@ __all__ = [
     "purge_user",
     "reembed_stale",
     "remove_source",
+    "request_summary",
     "session_sources",
     "split_text",
     "topic_groups",

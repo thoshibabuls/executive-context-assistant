@@ -1,16 +1,18 @@
 """Priority, reminders, notifications, briefings, prep sections.
 
-Owns (single writer, BACKEND_DESIGN.md §5.1): reminders, notifications, briefings. Priority
-columns are written through the owning modules' services (work, communication), and the computed
-relationship profile through ``people``. Slice 1.8: priority v1 and the Today read model; Phase 3:
-relationship profiles (3.4), reminders, notifications and Web Push (3.1). Deterministic only: this
-module never imports ``intelligence`` (import-linter contract). Other modules import only from
-this package root.
+Owns (single writer, BACKEND_DESIGN.md §5.1): reminders, notifications, push_subscriptions,
+briefings (and Phase 3 priority learning). Priority columns are written through the owning
+modules' services (work, communication), and the computed relationship profile through
+``people``. Slice 1.8: priority v1 and the Today read model. Phase 3: relationship profiles
+(3.4), reminders, notifications and Web Push (3.1), the daily briefing (3.2). Deterministic only:
+this module never imports ``intelligence`` (import-linter contract). Other modules import only
+from this package root.
 """
 
 from eca.attention import events as _events  # registers event types
 from eca.attention import tasks as _tasks  # registers handlers
-from eca.attention.events import REMINDER_DUE, ReminderDue
+from eca.attention.briefing import BriefingView, get_briefing, headline
+from eca.attention.events import BRIEFING_DUE, REMINDER_DUE, BriefingDue, ReminderDue
 from eca.attention.priority import PriorityConfig, conversation_features, item_features, score
 from eca.attention.profiles import ProfileInputs, compute_profile, refresh_profiles
 from eca.attention.purge import purge_expired, purge_user
@@ -35,9 +37,12 @@ from eca.attention.webpush import VapidKeys, WebPushSender, generate_keys
 del _events, _tasks
 
 __all__ = [
+    "BRIEFING_DUE",
     "PRIORITY_SWEEP_TASK",
     "REMINDER_DUE",
     "REMINDER_SWEEP_TASK",
+    "BriefingDue",
+    "BriefingView",
     "NotificationView",
     "PriorityConfig",
     "ProfileInputs",
@@ -53,7 +58,9 @@ __all__ = [
     "dismiss",
     "evaluate",
     "generate_keys",
+    "get_briefing",
     "get_reminder",
+    "headline",
     "item_features",
     "list_notifications",
     "list_reminders",

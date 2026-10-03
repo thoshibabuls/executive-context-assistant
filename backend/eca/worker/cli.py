@@ -8,6 +8,8 @@ Runs as the worker role (``API_WORKER_DATABASE_URL``).
 - ``vapid-keys`` (Phase 3): print a new Web Push VAPID key pair for the operator to store as
   ``WEB_PUSH_VAPID_PUBLIC_KEY`` / ``WEB_PUSH_VAPID_PRIVATE_KEY`` in the secret manager
   (TECHNICAL_DESIGN.md §15.4). Nothing is written to disk; needs no database.
+- ``cost --date YYYY-MM-DD`` (Phase 3): AI cost per user (hashed) and role for one UTC day, from
+  ``ai_cost_rollups`` (AI_COST_MODEL.md §8).
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from eca.attention import generate_keys
-from eca.intelligence import build_ai_client
+from eca.intelligence import build_ai_client, cost_by_user
 from eca.platform.config import Settings, get_settings
 from eca.platform.db import create_engine, create_session_factory
 from eca.platform.outbox import retry_failed
@@ -42,6 +44,8 @@ def _parser() -> argparse.ArgumentParser:
     reembed.add_argument("--limit", type=int, default=500)
     reembed.add_argument("--dry-run", action="store_true")
     ops.add_parser("vapid-keys", help="print a new Web Push VAPID key pair (store it as secrets)")
+    cost = ops.add_parser("cost", help="AI cost per user (hashed) and role for one UTC day")
+    cost.add_argument("--date", type=datetime.date.fromisoformat, required=True)
     return parser
 
 
@@ -79,6 +83,17 @@ async def reembed(settings: Settings, user_id: UUID, limit: int, dry_run: bool) 
     return f"{report.stale} chunk(s) with another embedding model; re-embedded {report.embedded}"
 
 
+async def cost_report(settings: Settings, day: datetime.date) -> str:
+    factory, engine = _factory(settings)
+    try:
+        async with factory(user_id=None) as uow:
+            rows = await cost_by_user(uow, day=day)
+    finally:
+        await engine.dispose()
+    lines = [" ".join((r.user_ref, r.role, str(r.calls), f"{r.est_cost_usd:.6f}")) for r in rows]
+    return "\n".join(["user role calls est_cost_usd", *lines])
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     ensure_selector_event_loop_policy()
@@ -87,6 +102,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"WEB_PUSH_VAPID_PUBLIC_KEY={public}")
         print(f"WEB_PUSH_VAPID_PRIVATE_KEY={private}")
         print("# Store both in the secret manager; never commit them. Set WEB_PUSH_VAPID_SUBJECT too.")
+        return 0
+    if args.area == "cost":
+        print(asyncio.run(cost_report(get_settings(), args.date)))
         return 0
     if args.area == "reembed":
         print(asyncio.run(reembed(get_settings(), args.user, args.limit, args.dry_run)))

@@ -7,13 +7,14 @@ import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Path, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from eca import attention, communication, ingestion, meetings, people, privacy, retrieval, work
 from eca.api.assistant import _card_json
+from eca.api.chat import _limiter as limiter
 from eca.api.common import (
     Cursors,
     Factory,
@@ -87,18 +88,81 @@ async def list_conversations(
     )
 
 
+def summary_json(s: communication.ThreadSummaryView) -> dict[str, Any] | None:
+    """AI-03 summary with its provenance (AI_PIPELINE.md §5.1, §5.9); labelled AI-derived."""
+    if s.text is None:
+        return None
+    return as_json(
+        {
+            "text": s.text,
+            "key_points": s.key_points,
+            "origin": "ai",
+            "label": "AI summary",
+            "provenance": {
+                "extraction_method": "llm",
+                "model": s.model,
+                "prompt_version": s.prompt_version,
+                "derived_at": s.derived_at,
+                "covered_source_ids": list(s.covered_source_ids),
+                "through_message_id": s.through_message_id,
+                "ai_call_ids": list(s.ai_call_ids),
+            },
+            "stale": s.stale,
+        }
+    )
+
+
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(conversation_id: UUID, user: User, factory: Factory) -> JSONResponse:
     async with factory(user_id=user.user_id) as uow:
         conv, messages = await communication.conversation_detail(uow, conversation_id)
+        timeline = await communication.gist_timeline(uow, conversation_id)
+        summary = await communication.thread_summary(uow, conversation_id)
         persons = await people.get_persons(
             uow, sorted({m.sender_person_id for m in messages if m.sender_person_id})
         )
     body = conversation_json(conv) | {
         "messages": jsonable_encoder(messages),
         "people": {str(k): jsonable_encoder(v) for k, v in persons.items()},
+        # Deterministic rendering of the stored AI-01 gists (AI_PIPELINE.md §5.9), labelled AI-derived.
+        "gist_timeline": [
+            as_json(
+                {
+                    "message_id": g.message_id,
+                    "source_item_id": g.source_item_id,
+                    "sent_at": g.sent_at,
+                    "sender_person_id": g.sender_person_id,
+                    "direction": g.direction,
+                    "gist": g.gist,
+                    "origin": "ai",
+                }
+            )
+            for g in timeline
+        ],
+        "summary": summary_json(summary),
+        "summary_pending": summary.pending,
+        "relevant_messages": summary.relevant_messages,
     }
     return JSONResponse(body, headers={"ETag": etag(conv.version)})
+
+
+@router.post("/conversations/{conversation_id}/summary", status_code=202)
+async def request_summary(
+    conversation_id: UUID, request: Request, user: User, factory: Factory
+) -> JSONResponse:
+    """AI-03 on request (BACKEND_DESIGN.md §16.8): 202 when queued, 200 with the stored summary
+    when it already covers the newest relevant message, 429 at the hard budget cap."""
+    limiter(request).check(user.user_id, "summary")
+    async with factory(user_id=user.user_id) as uow:
+        queued = await retrieval.request_summary(uow, conversation_id, now=now())
+        current = await communication.thread_summary(uow, conversation_id)
+    if not queued and not current.pending and current.text is not None and not current.stale:
+        return JSONResponse({"status": "current", "summary": summary_json(current)}, status_code=200)
+    if not queued and not current.pending:
+        raise ValidationFailed("this thread has too few analysed messages to summarize")
+    return JSONResponse(
+        {"status": "queued", "conversation_url": f"/api/v1/conversations/{conversation_id}"}, status_code=202
+    )
 
 
 @router.post("/conversations/{conversation_id}/mark-handled", status_code=204)
@@ -438,6 +502,29 @@ async def today(user: User, factory: Factory) -> dict[str, Any]:
         "people": {str(k): jsonable_encoder(v) for k, v in t.people.items()},
         "reminders": [reminder_json(r) for r in t.reminders],
     }
+
+
+@router.get("/briefings/{date}")
+async def get_briefing(
+    date: Annotated[datetime.date, Path(description="Local calendar date (YYYY-MM-DD) in your timezone")],
+    user: User,
+    factory: Factory,
+) -> dict[str, Any]:
+    """The deterministic daily briefing (no AI call); today's is generated on demand."""
+    async with factory(user_id=user.user_id) as uow:
+        b = await attention.get_briefing(uow, date, now=now())
+    return as_json(
+        {
+            "date": b.date,
+            "timezone": b.timezone,
+            "headline": b.headline,
+            "sections": b.content,
+            "generated_at": b.generated_at,
+            "trigger": b.trigger,
+            "updated_since_briefing": b.updated_since,
+            "origin": "computed",
+        }
+    )
 
 
 @router.get("/data-summary")

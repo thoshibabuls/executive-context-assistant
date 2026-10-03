@@ -1,6 +1,7 @@
 """Retrieval handlers: the index job on ``MessageNormalized`` and ``MeetingChanged``, chunk removal
 on ``SourceItemDeleted`` (BACKEND_DESIGN.md §15 Phase 2 jobs). ``TranscriptStored`` joins in
-slice 4.2, when transcripts exist."""
+slice 4.2, when transcripts exist. Phase 3: AI-03 on ``ThreadSummaryDue`` (natural key, queue
+``extract``) and the 5-minute ``thread_summary_sweep``."""
 
 from __future__ import annotations
 
@@ -12,12 +13,17 @@ from eca.intelligence import AIClient
 from eca.meetings import MEETING_CHANGED, MeetingChanged
 from eca.platform.clock import Clock
 from eca.platform.events import HandlerContext, handles
-from eca.platform.uow import UnitOfWork
+from eca.platform.jobs import PeriodicTaskSpec
+from eca.platform.uow import UnitOfWork, UnitOfWorkFactory
+from eca.retrieval import summaries
+from eca.retrieval.events import THREAD_SUMMARY_DUE, ThreadSummaryDue
 from eca.retrieval.indexing import IndexTarget, index_source, meeting_target, message_target, remove_source
 
 INDEX_MESSAGE_HANDLER = "retrieval.index_message"
 INDEX_MEETING_HANDLER = "retrieval.index_meeting"
 INDEX_REMOVED_HANDLER = "retrieval.index_removed"
+THREAD_SUMMARY_HANDLER = "retrieval.thread_summary"
+THREAD_SUMMARY_SWEEP_TASK = "eca.retrieval.thread_summary_sweep"
 
 
 def _now(ctx: HandlerContext) -> datetime.datetime:
@@ -70,3 +76,33 @@ async def on_source_item_deleted(ctx: HandlerContext) -> None:
     payload = ctx.payload
     assert isinstance(payload, SourceItemDeleted)
     await remove_source(ctx.tx, payload.source_item_id)
+
+
+@handles(THREAD_SUMMARY_DUE, name=THREAD_SUMMARY_HANDLER, queue="extract", mode="natural_key")
+async def on_thread_summary_due(ctx: HandlerContext) -> None:
+    payload = ctx.payload
+    assert isinstance(payload, ThreadSummaryDue) and ctx.envelope.user_id is not None
+    await summaries.summarize(
+        ctx.factory,
+        ctx.resources.get(AIClient),
+        user_id=ctx.envelope.user_id,
+        conversation_id=payload.conversation_id,
+        through_message_id=payload.through_message_id,
+        now=_now(ctx),
+    )
+
+
+async def _summary_sweep(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> None:
+    await summaries.sweep_all(uow_factory, now=now)
+
+
+def periodic_tasks() -> list[PeriodicTaskSpec]:
+    return [
+        PeriodicTaskSpec(
+            name=THREAD_SUMMARY_SWEEP_TASK,
+            periodic_id="thread_summary_sweep",
+            cron="*/5 * * * *",
+            queue="schedule",
+            run=_summary_sweep,
+        )
+    ]

@@ -1,5 +1,5 @@
-"""Interactive AI calls of the chat path: AI-05 planner, AI-06 lookups, AI-07 synthesis
-(AI_PIPELINE.md §3, §5.7-§5.8, §7, §11).
+"""Interactive AI calls: AI-05 planner, AI-06 lookups, AI-07 synthesis (chat), and AI-03 thread
+summaries (Phase 3) (AI_PIPELINE.md §3, §5.7-§5.9, §7, §11).
 
 Each call goes through ``AIClient`` (role registry, cassettes, ``ai_calls`` meter) with the
 interactive attempt policy: the primary model, one retry, one fallback call, then degradation.
@@ -20,6 +20,8 @@ from eca.intelligence.output_schemas.answer_lookup import SCHEMA_VERSION as ANSW
 from eca.intelligence.output_schemas.answer_lookup import Answer
 from eca.intelligence.output_schemas.plan_query import SCHEMA_VERSION as PLAN_SCHEMA
 from eca.intelligence.output_schemas.plan_query import PlanQuery
+from eca.intelligence.output_schemas.thread_summary import SCHEMA_VERSION as SUMMARY_SCHEMA
+from eca.intelligence.output_schemas.thread_summary import ThreadSummary
 from eca.intelligence.provider.attempts import Degraded, run_interactive
 from eca.intelligence.provider.client import AIClient, GenerateResult
 from eca.intelligence.provider.types import AIError
@@ -110,5 +112,24 @@ async def run_answer(
         schema_version=ANSWER_SCHEMA,
         output_model=Answer,
         content=f"PACKET:\n{packet_text}",
+        user_id=user_id,
+    )
+
+
+THREAD_SUMMARY_PROMPT_VERSION = "thread_summary/v1"
+
+
+async def run_thread_summary(
+    client: AIClient, messages_block: str, *, user_id: UUID | None
+) -> InteractiveCall[ThreadSummary]:
+    """AI-03 over clean, delimited messages (``[Mn]`` references; AI_PIPELINE.md §5.9). Primary,
+    one retry, one fallback; the caller falls back to the gist timeline."""
+    return await _interactive(
+        client,
+        role="thread_summary",
+        prompt_version=THREAD_SUMMARY_PROMPT_VERSION,
+        schema_version=SUMMARY_SCHEMA,
+        output_model=ThreadSummary,
+        content=f"MESSAGES:\n{messages_block}",
         user_id=user_id,
     )

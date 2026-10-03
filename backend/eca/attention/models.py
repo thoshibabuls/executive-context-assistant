@@ -1,4 +1,5 @@
-"""Tables owned by ``attention`` (BACKEND_DESIGN.md §5.1, §17.6). Mirrors migrations 0019 and 0020."""
+"""Tables owned by ``attention`` (BACKEND_DESIGN.md §5.1, §17.6). Mirrors migrations 0019, 0020
+and 0022."""
 
 from __future__ import annotations
 
@@ -6,6 +7,7 @@ from sqlalchemy import (
     REAL,
     Boolean,
     Column,
+    Date,
     DateTime,
     Integer,
     LargeBinary,
@@ -78,4 +80,16 @@ push_subscriptions_table = Table(
     Column("failure_count", SmallInteger, nullable=False),
     Column("revoked_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True)),
+)
+
+briefings_table = Table(
+    "briefings",
+    metadata,
+    Column("user_id", PG_UUID(as_uuid=True), primary_key=True),
+    Column("date", Date, primary_key=True),
+    Column("timezone", Text, nullable=False),
+    Column("headline", Text, nullable=False),
+    Column("content", JSONB, nullable=False),
+    Column("generated_at", DateTime(timezone=True), nullable=False),
+    Column("trigger", Text, nullable=False),
 )
