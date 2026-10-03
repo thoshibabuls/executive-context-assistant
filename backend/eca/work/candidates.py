@@ -118,6 +118,32 @@ async def _thread_item_ids(uow: UnitOfWork, conversation_id: UUID) -> list[UUID]
     return sorted(r.item_id for r in rows)
 
 
+_WORD_RE = re.compile(r"[a-z0-9][a-z0-9\-]*")
+_FILLER = frozenset(
+    {
+        "the", "and", "for", "with", "from", "send", "sent", "get", "give", "provide", "share", "deliver",
+        "update", "review", "this", "that", "will", "our", "your", "their", "into", "about", "draft",
+    }
+)  # fmt: skip
+
+
+def content_words(text: str) -> set[str]:
+    """Lower-case words of at least 3 letters, or 2 with a digit ("q3"), without filler words."""
+    return {
+        w
+        for w in _WORD_RE.findall(text.lower())
+        if (len(w) >= 3 or (len(w) == 2 and any(c.isdigit() for c in w))) and w not in _FILLER
+    }
+
+
+def lexically_close(title: str, body_words: set[str]) -> bool:
+    """Candidate rule 3 without item embeddings (CONTEXT_ARCHITECTURE.md §12.1): at least two
+    content words of the title, and at least 75% of them, occur in the message body."""
+    words = content_words(title)
+    found = words & body_words
+    return len(found) >= 2 and len(found) >= 0.75 * len(words)
+
+
 async def build_candidates(uow: UnitOfWork, view: MessageView, *, self_id: UUID) -> list[Candidate]:
     items = {i.id: i for i in await matchable_items(uow, now=view.sent_at)}
     thread_ids = [i for i in await _thread_item_ids(uow, view.conversation_id) if i in items]
@@ -133,7 +159,19 @@ async def build_candidates(uow: UnitOfWork, view: MessageView, *, self_id: UUID)
         ),
         key=lambda i: (-(i.last_activity_at or view.sent_at).timestamp(), str(i.id)),
     )
-    ordered = [items[i] for i in thread_ids] + by_people
+    taken = set(thread_ids) | {i.id for i in by_people}
+    body_words = content_words(view.body_clean or "")
+    close = sorted(
+        (
+            i
+            for i in items.values()
+            if i.id not in taken
+            and self_id in {i.owner_person_id, i.counterparty_person_id}
+            and lexically_close(i.title, body_words)
+        ),
+        key=lambda i: (-(i.last_activity_at or view.sent_at).timestamp(), str(i.id)),
+    )
+    ordered = [items[i] for i in thread_ids] + by_people + close
     open_first = [i for i in ordered if i.verification_status != "rejected"]
     rejected = [i for i in ordered if i.verification_status == "rejected"]
     chosen = (open_first + rejected)[:MAX_CANDIDATES]

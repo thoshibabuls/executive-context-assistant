@@ -856,7 +856,7 @@ Every T1 extraction call receives up to 8 **candidates** so the model can attach
 
 1. Open items and open questions in the same thread.
 2. Open items and open questions involving the same participants (last 60 days).
-3. Items semantically close to the message (`dedupe_embedding` ≥ 0.80) with a shared participant or project hint.
+3. Items semantically close to the message (`dedupe_embedding` ≥ 0.80) with a shared participant or project hint. Until item embeddings exist (`IMPLEMENTATION_PLAN.md` §0.6), closeness is lexical: at least two content words of the item title and at least 75% of them occur in the message body, and the item involves the user (owner or counterparty), so a third party's update on someone else's commitment to the user finds that commitment.
 4. Most recent decisions on the same project hint.
 5. Items rejected in the last 90 days that match 1–3 (flagged as rejected, §12.3).
 

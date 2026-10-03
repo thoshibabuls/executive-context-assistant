@@ -98,6 +98,10 @@ class ApiHarness:
         """Run every pending event through the production handlers (the worker's job)."""
         return asyncio.run(_drain(self))
 
+    def sync_mail_again(self, user: ApiUser) -> None:
+        """Sync the user's fake mailbox again over the existing connection (new mail, deletions)."""
+        asyncio.run(_sync_mail(self, user))
+
     def sync_calendar(self, user: ApiUser, events: Sequence[NormalizedEvent]) -> None:
         """Add events to the user's fake calendar and sync it over the existing fake connection."""
         self.accounts.calendar_feed(user.email).extend(events)
@@ -180,6 +184,22 @@ async def _connect_and_sync(h: ApiHarness, user: ApiUser) -> UUID:
         return connection_id
     finally:
         await api.dispose()
+        await worker.dispose()
+
+
+async def _sync_mail(h: ApiHarness, user: ApiUser) -> None:
+    worker = create_engine(h.db.worker_url, pool_size=2, max_overflow=0)
+    try:
+        connection_id = h.scalar("SELECT id FROM connections WHERE user_id = %s", (user.user_id,))
+        await sync_mail(
+            UnitOfWorkFactory(create_session_factory(worker)),
+            h.connectors,
+            user_id=user.user_id,
+            connection_id=connection_id,
+            now=datetime.datetime.now(datetime.UTC),
+            owner=f"api-harness-{uuid7()}",
+        )
+    finally:
         await worker.dispose()
 
 
