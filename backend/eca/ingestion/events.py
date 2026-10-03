@@ -12,6 +12,8 @@ SOURCE_ITEM_STORED = "SourceItemStored"
 SOURCE_ITEM_STAGE_DUE = "SourceItemStageDue"
 SYNC_REQUESTED = "SyncRequested"
 SOURCE_ITEM_DELETED = "SourceItemDeleted"
+SOURCE_ITEM_TRASHED = "SourceItemTrashed"
+SOURCE_ITEM_RESTORED = "SourceItemRestored"
 
 
 class SourceItemStored(BaseModel):
@@ -36,6 +38,22 @@ class SourceItemDeleted(BaseModel):
     kind: str
 
 
+class SourceItemTrashed(BaseModel):
+    """Moved to Trash or Spam at the provider (§9.2): out of retrieval and needs-response."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    source_item_id: UUID
+    kind: str
+
+
+class SourceItemRestored(BaseModel):
+    """Taken out of Trash or Spam (§9.2): the reverse of ``SourceItemTrashed``."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    source_item_id: UUID
+    kind: str
+
+
 class SyncRequested(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     connection_id: UUID
@@ -47,3 +65,5 @@ register_event(SOURCE_ITEM_STORED, SourceItemStored)
 register_event(SOURCE_ITEM_STAGE_DUE, SourceItemStageDue)
 register_event(SYNC_REQUESTED, SyncRequested)
 register_event(SOURCE_ITEM_DELETED, SourceItemDeleted)
+register_event(SOURCE_ITEM_TRASHED, SourceItemTrashed)
+register_event(SOURCE_ITEM_RESTORED, SourceItemRestored)

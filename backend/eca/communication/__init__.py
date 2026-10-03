@@ -6,7 +6,12 @@ Other modules import only from this package root.
 
 from eca.communication import tasks as _tasks  # registers handlers
 from eca.communication.cleaning import clean_body, html_to_text, split_forwarded
-from eca.communication.events import MESSAGE_NORMALIZED, MessageNormalized
+from eca.communication.events import (
+    CONVERSATION_STATE_CHANGED,
+    MESSAGE_NORMALIZED,
+    ConversationStateChanged,
+    MessageNormalized,
+)
 from eca.communication.prefilter import PrefilterDecision, PrefilterInput, decide
 from eca.communication.purge import (
     PREFILTERED_BODY_DAYS,
@@ -78,12 +83,14 @@ from eca.communication.tasks import NORMALIZE_HANDLER, NORMALIZE_RETRY_HANDLER
 del _tasks
 
 __all__ = [
+    "CONVERSATION_STATE_CHANGED",
     "MESSAGE_NORMALIZED",
     "NORMALIZE_HANDLER",
     "NORMALIZE_RETRY_HANDLER",
     "PREFILTERED_BODY_DAYS",
     "RELEVANT_BODY_DAYS",
     "ConversationPage",
+    "ConversationStateChanged",
     "ConversationSummary",
     "GistEntry",
     "InteractionCounts",

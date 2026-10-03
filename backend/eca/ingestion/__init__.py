@@ -10,12 +10,16 @@ from eca.connectors import (
 from eca.ingestion import tasks as _tasks  # registers handlers
 from eca.ingestion.events import (
     SOURCE_ITEM_DELETED,
+    SOURCE_ITEM_RESTORED,
     SOURCE_ITEM_STAGE_DUE,
     SOURCE_ITEM_STORED,
+    SOURCE_ITEM_TRASHED,
     SYNC_REQUESTED,
     SourceItemDeleted,
+    SourceItemRestored,
     SourceItemStageDue,
     SourceItemStored,
+    SourceItemTrashed,
     SyncRequested,
 )
 from eca.ingestion.purge import purge_sources, purge_user, source_ids_for_connection
@@ -42,6 +46,7 @@ from eca.ingestion.service import (
     store_messages,
     sync_calendar,
     sync_mail,
+    trashed_among,
     visible_among,
     visible_source_ids,
 )
@@ -54,8 +59,10 @@ __all__ = [
     "CALENDAR_RESOURCE",
     "MAIL_RESOURCE",
     "SOURCE_ITEM_DELETED",
+    "SOURCE_ITEM_RESTORED",
     "SOURCE_ITEM_STAGE_DUE",
     "SOURCE_ITEM_STORED",
+    "SOURCE_ITEM_TRASHED",
     "STAGES",
     "SYNC_HANDLER",
     "SYNC_REQUESTED",
@@ -64,8 +71,10 @@ __all__ = [
     "InvalidStageTransition",
     "SourceItem",
     "SourceItemDeleted",
+    "SourceItemRestored",
     "SourceItemStageDue",
     "SourceItemStored",
+    "SourceItemTrashed",
     "SyncReport",
     "SyncRequested",
     "build_connector_registry",
@@ -91,6 +100,7 @@ __all__ = [
     "store_messages",
     "sync_calendar",
     "sync_mail",
+    "trashed_among",
     "visible_among",
     "visible_source_ids",
 ]

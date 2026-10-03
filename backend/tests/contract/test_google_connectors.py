@@ -278,3 +278,63 @@ async def test_calendar_errors(status: int, headers: dict[str, str], error: type
         await cal.list_events(cursor="fp|sync-2", page_token=None, now=NOW)
     if isinstance(caught.value, RateLimited):
         assert caught.value.retry_after_s == 7
+
+
+async def test_gmail_history_reports_trash_and_spam_label_changes() -> None:
+    gmail, _ = _gmail(
+        {
+            "/history": lambda r: httpx.Response(
+                200,
+                json={
+                    "history": [
+                        {
+                            "labelsAdded": [
+                                {"message": {"id": "m7", "labelIds": ["TRASH"]}, "labelIds": ["TRASH"]}
+                            ]
+                        },
+                        {
+                            "labelsAdded": [
+                                {"message": {"id": "m8", "labelIds": ["SPAM"]}, "labelIds": ["SPAM"]}
+                            ]
+                        },
+                        {
+                            "labelsAdded": [
+                                {"message": {"id": "m9", "labelIds": ["STARRED"]}, "labelIds": ["STARRED"]}
+                            ]
+                        },
+                        {
+                            "labelsRemoved": [
+                                {"message": {"id": "m10", "labelIds": ["INBOX"]}, "labelIds": ["TRASH"]}
+                            ]
+                        },
+                        {
+                            "labelsRemoved": [
+                                {"message": {"id": "m11", "labelIds": ["SPAM"]}, "labelIds": ["TRASH"]}
+                            ]
+                        },
+                        {
+                            "labelsAdded": [
+                                {"message": {"id": "m12", "labelIds": ["TRASH"]}, "labelIds": ["TRASH"]}
+                            ]
+                        },
+                        {
+                            "labelsRemoved": [
+                                {"message": {"id": "m12", "labelIds": ["INBOX"]}, "labelIds": ["TRASH"]}
+                            ]
+                        },
+                        {
+                            "labelsAdded": [
+                                {"message": {"id": "m13", "labelIds": ["TRASH"]}, "labelIds": ["TRASH"]}
+                            ]
+                        },
+                        {"messagesDeleted": [{"message": {"id": "m13"}}]},
+                    ],
+                    "historyId": "820",
+                },
+            )
+        }
+    )
+    batch = await gmail.list_messages(cursor="810", page_token=None, now=NOW)
+    assert batch.trashed_external_ids == ("m7", "m8")  # m9 is not a bin label; m13 was deleted
+    assert batch.restored_external_ids == ("m10", "m12")  # m11 is still in Spam
+    assert batch.deleted_external_ids == ("m13",)

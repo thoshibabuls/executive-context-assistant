@@ -21,10 +21,15 @@ from sqlalchemy import any_, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from eca.communication.cleaning import clean_body, snippet
-from eca.communication.events import MESSAGE_NORMALIZED, MessageNormalized
+from eca.communication.events import (
+    CONVERSATION_STATE_CHANGED,
+    MESSAGE_NORMALIZED,
+    ConversationStateChanged,
+    MessageNormalized,
+)
 from eca.communication.models import conversations_table, message_participants_table, messages_table
 from eca.communication.prefilter import PrefilterInput, decide
-from eca.ingestion import SourceItem, get_source_item, set_stage
+from eca.ingestion import SourceItem, get_source_item, set_stage, trashed_among
 from eca.people import (
     MentionIn,
     PersonRef,
@@ -106,6 +111,33 @@ async def _conversation_id(uow: UnitOfWork, item: SourceItem, subject: str | Non
     return UUID(str(row.id))
 
 
+async def on_bin_change(uow: UnitOfWork, source_item_id: UUID, *, trashed: bool) -> UUID | None:
+    """A message moved to or out of Trash/Spam: its conversation's state is recomputed (§9.2)."""
+    m = messages_table
+    conversation_id = (
+        await uow.session.execute(
+            select(m.c.conversation_id).where(m.c.source_item_id == source_item_id, m.c.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if conversation_id is None:
+        return None
+    await recompute_reply_state(uow, conversation_id)
+    await publish_state_changed(uow, conversation_id, "trashed" if trashed else "restored")
+    return UUID(str(conversation_id))
+
+
+async def publish_state_changed(uow: UnitOfWork, conversation_id: UUID, reason: str) -> None:
+    await publish(
+        uow,
+        NewEvent(
+            CONVERSATION_STATE_CHANGED,
+            "conversation",
+            conversation_id,
+            ConversationStateChanged(conversation_id=conversation_id, reason=reason),
+        ),
+    )
+
+
 async def recompute_reply_state(uow: UnitOfWork, conversation_id: UUID) -> None:
     """Reply state from all of the conversation's messages (deterministic, order-independent).
 
@@ -114,14 +146,32 @@ async def recompute_reply_state(uow: UnitOfWork, conversation_id: UUID) -> None:
     ``heuristic``, AI_PIPELINE.md §4.2 O1). A user's "handled" mark is never overridden.
     """
     m = messages_table
-    rows = (
+    found = (
         await uow.session.execute(
-            select(m.c.id, m.c.direction, m.c.sent_at, m.c.is_bulk, m.c.body_clean, m.c.triage, m.c.subject)
+            select(
+                m.c.id,
+                m.c.source_item_id,
+                m.c.direction,
+                m.c.sent_at,
+                m.c.is_bulk,
+                m.c.body_clean,
+                m.c.triage,
+                m.c.subject,
+            )
             .where(m.c.conversation_id == conversation_id, m.c.deleted_at.is_(None))
             .order_by(m.c.sent_at, m.c.id)
         )
     ).all()
+    binned = await trashed_among(uow, [r.source_item_id for r in found])
+    rows = [r for r in found if r.source_item_id not in binned]  # Trash/Spam is out of the state (§9.2)
     if not rows:
+        if found:  # every message is in Trash or Spam: nothing awaits a reply
+            c = conversations_table
+            await uow.session.execute(
+                update(c)
+                .where(c.c.id == conversation_id)
+                .values(awaiting="none", needs_reply=False, needs_reply_source="heuristic")
+            )
         return
     relevant = [r for r in rows if not r.is_bulk] or rows
     latest = relevant[-1]

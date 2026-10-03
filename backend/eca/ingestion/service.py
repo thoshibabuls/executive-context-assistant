@@ -38,11 +38,15 @@ from eca.connectors import ConnectionInfo, ConnectorRegistry, NormalizedMessage,
 from eca.identity import list_active_user_ids
 from eca.ingestion.events import (
     SOURCE_ITEM_DELETED,
+    SOURCE_ITEM_RESTORED,
     SOURCE_ITEM_STAGE_DUE,
     SOURCE_ITEM_STORED,
+    SOURCE_ITEM_TRASHED,
     SourceItemDeleted,
+    SourceItemRestored,
     SourceItemStageDue,
     SourceItemStored,
+    SourceItemTrashed,
 )
 from eca.ingestion.models import source_items_table
 from eca.ingestion.stages import MAX_STAGE_ATTEMPTS, SLA, check_transition
@@ -83,6 +87,69 @@ class SourceItem:
     stage: str
 
 
+BIN_CATEGORIES = frozenset({"trash", "spam"})
+
+
+def in_bin(categories: Sequence[str]) -> bool:
+    """Trash or Spam (BACKEND_DESIGN.md §9.2)."""
+    return bool(BIN_CATEGORIES & set(categories))
+
+
+async def _publish_bin_change(uow: UnitOfWork, source_item_id: UUID, kind: str, trashed: bool) -> None:
+    if trashed:
+        payload: SourceItemTrashed | SourceItemRestored = SourceItemTrashed(
+            source_item_id=source_item_id, kind=kind
+        )
+    else:
+        payload = SourceItemRestored(source_item_id=source_item_id, kind=kind)
+    await publish(
+        uow,
+        NewEvent(
+            SOURCE_ITEM_TRASHED if trashed else SOURCE_ITEM_RESTORED, "source_item", source_item_id, payload
+        ),
+    )
+
+
+async def mark_binned(
+    uow: UnitOfWork, info: ConnectionInfo, *, kind: str, external_ids: Sequence[str], trashed: bool
+) -> int:
+    """Moved to (``trashed``) or out of Trash/Spam at the provider: flag, categories, event (§9.2)."""
+    if not external_ids:
+        return 0
+    t = source_items_table
+    rows = (
+        await uow.session.execute(
+            select(t.c.id, t.c.categories).where(
+                t.c.connection_id == info.connection_id,
+                t.c.kind == kind,
+                t.c.external_id.in_(list(external_ids)),
+                t.c.deleted_at.is_(None),
+                t.c.trashed.is_not(trashed),
+            )
+        )
+    ).all()
+    for row in rows:
+        categories = [c for c in (row.categories or []) if c not in BIN_CATEGORIES]
+        if trashed:
+            categories.append("trash")
+        await uow.session.execute(
+            update(t).where(t.c.id == row.id).values(trashed=trashed, categories=categories or ["inbox"])
+        )
+        await _publish_bin_change(uow, row.id, kind, trashed)
+    return len(rows)
+
+
+async def trashed_among(uow: UnitOfWork, source_item_ids: Sequence[UUID]) -> set[UUID]:
+    """The given source items that are in Trash or Spam (excluded from reply state, §9.2)."""
+    if not source_item_ids:
+        return set()
+    t = source_items_table
+    rows = await uow.session.execute(
+        select(t.c.id).where(t.c.user_id == uow.user_id, t.c.id.in_(list(source_item_ids)), t.c.trashed)
+    )
+    return {r.id for r in rows}
+
+
 async def store_messages(uow: UnitOfWork, info: ConnectionInfo, messages: Sequence[NormalizedMessage]) -> int:
     """Upsert one page of messages; publish ``SourceItemStored`` for each new row."""
     stored = 0
@@ -104,7 +171,7 @@ async def store_messages(uow: UnitOfWork, info: ConnectionInfo, messages: Sequen
                     provider_version=m.provider_version,
                     categories=list(m.categories),
                     occurred_at=m.sent_at,
-                    trashed="trash" in m.categories,
+                    trashed=in_bin(m.categories),
                     content=m.content(),
                     raw_metadata={"deep_link": m.deep_link} if m.deep_link else {},
                 )
@@ -114,16 +181,24 @@ async def store_messages(uow: UnitOfWork, info: ConnectionInfo, messages: Sequen
         ).scalar_one_or_none()
         if inserted is None:
             # Already stored: metadata (categories) only; content is immutable per content_hash (§6.2).
-            await uow.session.execute(
-                update(t)
-                .where(
-                    t.c.connection_id == info.connection_id,
-                    t.c.kind == "message",
-                    t.c.external_id == m.external_id,
+            before = (
+                await uow.session.execute(
+                    select(t.c.id, t.c.trashed).where(
+                        t.c.connection_id == info.connection_id,
+                        t.c.kind == "message",
+                        t.c.external_id == m.external_id,
+                        t.c.categories != list(m.categories),
+                    )
                 )
-                .where(t.c.categories != list(m.categories))
-                .values(categories=list(m.categories), trashed="trash" in m.categories)
-            )
+            ).one_or_none()
+            if before is not None:
+                await uow.session.execute(
+                    update(t)
+                    .where(t.c.id == before.id)
+                    .values(categories=list(m.categories), trashed=in_bin(m.categories))
+                )
+                if bool(before.trashed) != in_bin(m.categories):
+                    await _publish_bin_change(uow, before.id, "message", in_bin(m.categories))
             continue
         stored += 1
         await publish(
@@ -222,6 +297,8 @@ async def _store_mail_page(uow: UnitOfWork, info: ConnectionInfo, batch: SyncBat
     stored = await store_messages(uow, info, batch.items)
     if batch.deleted_external_ids:
         await mark_deleted(uow, info, kind="message", external_ids=batch.deleted_external_ids)
+    await mark_binned(uow, info, kind="message", external_ids=batch.trashed_external_ids, trashed=True)
+    await mark_binned(uow, info, kind="message", external_ids=batch.restored_external_ids, trashed=False)
     return stored
 
 

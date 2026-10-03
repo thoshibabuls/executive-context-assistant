@@ -112,3 +112,5 @@ class SyncBatch(Generic[T]):
     deleted_external_ids: tuple[str, ...]
     next_page_token: str | None  # opaque; None when this run has no more pages
     high_water_cursor: str  # opaque cursor to store once the whole run is committed
+    trashed_external_ids: tuple[str, ...] = ()  # moved to Trash or Spam (BACKEND_DESIGN.md §9.2)
+    restored_external_ids: tuple[str, ...] = ()  # taken out of Trash or Spam

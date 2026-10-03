@@ -16,7 +16,7 @@ from uuid import UUID
 from sqlalchemy import delete, exists, select, update
 
 from eca.communication.models import conversations_table, message_participants_table, messages_table
-from eca.communication.service import recompute_reply_state
+from eca.communication.service import publish_state_changed, recompute_reply_state
 from eca.platform.uow import UnitOfWork
 
 PREFILTERED_BODY_DAYS = 30
@@ -42,6 +42,7 @@ async def on_source_deleted(uow: UnitOfWork, source_item_id: UUID, *, now: datet
     ).scalar_one()
     if remaining:
         await recompute_reply_state(uow, row.conversation_id)
+        await publish_state_changed(uow, row.conversation_id, "deleted")
     else:
         await uow.session.execute(update(c).where(c.c.id == row.conversation_id).values(deleted_at=now))
 

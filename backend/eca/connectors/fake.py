@@ -59,6 +59,13 @@ class FakeFeed(Generic[T]):
     expire_cursors_below: int = 0  # cursors < this raise CursorExpired
     pages_served: int = 0
     pending_deletions: list[str] = field(default_factory=list)  # reported once, on the next page
+    pending_bin: dict[str, bool] = field(default_factory=dict)  # Trash/Spam label changes
+
+    def move_to_trash(self, external_id: str) -> None:
+        self.pending_bin[external_id] = True
+
+    def restore_from_trash(self, external_id: str) -> None:
+        self.pending_bin[external_id] = False
 
     def delete(self, external_id: str) -> None:
         """The provider permanently deletes an item: the next sync reports its ID as deleted."""
@@ -92,9 +99,12 @@ class FakeFeed(Generic[T]):
         end = start + len(chunk)
         self.pages_served += 1
         deleted, self.pending_deletions = tuple(self.pending_deletions), []
+        binned, self.pending_bin = self.pending_bin, {}
         return SyncBatch(
             items=tuple(chunk),
             deleted_external_ids=deleted,
+            trashed_external_ids=tuple(k for k, v in binned.items() if v),
+            restored_external_ids=tuple(k for k, v in binned.items() if not v),
             next_page_token=str(end) if end < len(visible) else None,
             high_water_cursor=str(len(visible)),
         )

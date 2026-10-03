@@ -43,6 +43,7 @@ LABEL_CATEGORIES = {
     "SPAM": "spam",
 }
 PAGE_SIZE = 50
+BIN_LABELS = frozenset({"TRASH", "SPAM"})
 TokenProvider = Callable[[], Awaitable[str]]
 
 
@@ -185,16 +186,28 @@ class GmailConnector:
         body = await self._get("/history", params, cost="history")
         added: list[str] = []
         deleted: list[str] = []
+        binned: dict[str, bool] = {}  # message → in Trash/Spam after this page's label changes
         for record in body.get("history", []):
             for entry in record.get("messagesAdded", []):
                 if entry["message"]["id"] not in added:
                     added.append(entry["message"]["id"])
             for entry in record.get("messagesDeleted", []):
                 deleted.append(entry["message"]["id"])
+            for entry in record.get("labelsAdded", []):
+                if BIN_LABELS & set(entry.get("labelIds", [])):
+                    binned[entry["message"]["id"]] = True
+            for entry in record.get("labelsRemoved", []):
+                still = BIN_LABELS & set(entry["message"].get("labelIds", []))
+                if BIN_LABELS & set(entry.get("labelIds", [])) and not still:
+                    binned[entry["message"]["id"]] = False
         items = [m for m in [await self._message(mid) for mid in added if mid not in deleted] if m]
+        fetched = {m.external_id for m in items}
+        changed = {mid: v for mid, v in binned.items() if mid not in deleted and mid not in fetched}
         return SyncBatch(
             items=tuple(items),
             deleted_external_ids=tuple(deleted),
             next_page_token=body.get("nextPageToken"),
             high_water_cursor=str(body.get("historyId", cursor)),
+            trashed_external_ids=tuple(mid for mid, v in changed.items() if v),
+            restored_external_ids=tuple(mid for mid, v in changed.items() if not v),
         )

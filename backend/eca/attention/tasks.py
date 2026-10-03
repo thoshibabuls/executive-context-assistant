@@ -41,7 +41,9 @@ from eca.attention.reminders import sweep_all as reminder_sweep_all
 from eca.attention.service import recompute_conversations, recompute_items, sweep_all, sweep_user
 from eca.attention.webpush import WebPushSender
 from eca.communication import (
+    CONVERSATION_STATE_CHANGED,
     MESSAGE_NORMALIZED,
+    ConversationStateChanged,
     MessageNormalized,
     message_conversation_id,
     message_participant_ids,
@@ -136,6 +138,19 @@ async def on_conversation_reminders(ctx: HandlerContext) -> None:
     if conversation_id is not None:
         await _rem_lock(ctx.tx, conversation_id)
         await evaluate(ctx.tx, now=ctx.resources.get(Clock).now(), conversation_ids=[conversation_id])
+
+
+@handles(CONVERSATION_STATE_CHANGED, name="attention.conversation_state")
+async def on_conversation_state_changed(ctx: HandlerContext) -> None:
+    """Trash/Spam, restore or a provider deletion changed a thread (§9.2, §9.3 step 5)."""
+    payload = ctx.payload
+    assert isinstance(payload, ConversationStateChanged)
+    now = ctx.resources.get(Clock).now()
+    await recompute_conversations(
+        ctx.tx, priority_config(), now=now, conversation_ids=[payload.conversation_id]
+    )
+    await _rem_lock(ctx.tx, payload.conversation_id)
+    await evaluate(ctx.tx, now=now, conversation_ids=[payload.conversation_id])
 
 
 @handles(MEETING_CHANGED, name="attention.reminders_meeting")
