@@ -67,8 +67,12 @@ def test_registries_are_isolated_from_the_default_registry() -> None:
 
     local = EventRegistry()
     local.register_event("test.LocalOnly", Payload)
+    local.handles("test.LocalOnly", name="test.local_only_handler")(_noop)
     assert not default_registry.is_registered("test.LocalOnly")
-    assert default_registry.handlers() == []  # slice 0.3 registers no production handlers
+    # Domain modules register production handlers in the default registry (since Phase 1); none
+    # of a local registry's handlers may appear there.
+    assert "test.local_only_handler" not in {h.name for h in default_registry.handlers()}
+    assert [h.name for h in local.handlers()] == ["test.local_only_handler"]
 
 
 def test_envelope_validation() -> None:

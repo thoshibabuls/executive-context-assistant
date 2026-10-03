@@ -3,7 +3,8 @@
 Tenants are created only through the service functions (``identity.create_user`` and
 ``people.create_self_person`` in an API-role unit of work for the new user's own ID); there is no
 authentication bypass. Handlers run through ``eca.platform.inline.InlineExecutor`` with the
-production default registry.
+production registry (``eca.worker.composition``: every domain handler, independent of what
+earlier tests imported) and an AI client over ``tests.fake_ai.FakeProvider`` (no network).
 """
 
 from __future__ import annotations
@@ -21,18 +22,20 @@ from uuid import UUID
 import psycopg
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-import eca.communication  # noqa: F401  (registers the normalize and sync handlers)
 from eca.connections import create_connection
 from eca.connectors import ConnectorRegistry, FakeAccounts, FakeFeed, NormalizedMessage, load_eml_dir
 from eca.identity import create_user
+from eca.intelligence import AIClient
 from eca.people import create_self_person
 from eca.platform.clock import ManualClock
 from eca.platform.db import create_engine, create_session_factory
-from eca.platform.events import Resources, default_registry
+from eca.platform.events import Resources
 from eca.platform.ids import uuid7
 from eca.platform.inline import InlineExecutor
 from eca.platform.uow import UnitOfWorkFactory
+from eca.worker.composition import production_registry
 from tests.conftest import TempDatabase
+from tests.fake_ai import FakeProvider, fake_ai_client
 
 REPO = Path(__file__).resolve().parents[3]
 WORLD_V1 = REPO / "evals" / "ai" / "datasets" / "world_v1"
@@ -60,14 +63,16 @@ class Pipeline:
     accounts: FakeAccounts
     connectors: ConnectorRegistry
     clock: ManualClock
+    fake_ai: FakeProvider
+    ai: AIClient
     extra_resources: list[object] = field(default_factory=list)
 
     @property
     def resources(self) -> Resources:
-        return Resources.of(self.connectors, self.clock, *self.extra_resources)
+        return Resources.of(self.connectors, self.clock, self.ai, *self.extra_resources)
 
     def executor(self) -> InlineExecutor:
-        return InlineExecutor(self.worker, default_registry, self.resources)
+        return InlineExecutor(self.worker, production_registry(), self.resources)
 
     async def drain(self) -> int:
         return await self.executor().drain()
@@ -101,14 +106,18 @@ async def pipeline(db: TempDatabase, *, start: datetime.datetime = T_START) -> A
     connectors = ConnectorRegistry()
     connectors.register_mail("fake", accounts.mail_connector)
     connectors.register_calendar("fake", accounts.calendar_connector)
+    fake = FakeProvider()
+    worker = UnitOfWorkFactory(create_session_factory(worker_engine))
     p = Pipeline(
         db=db,
         api=UnitOfWorkFactory(create_session_factory(api_engine)),
-        worker=UnitOfWorkFactory(create_session_factory(worker_engine)),
+        worker=worker,
         engines=[api_engine, worker_engine],
         accounts=accounts,
         connectors=connectors,
         clock=ManualClock(start),
+        fake_ai=fake,
+        ai=fake_ai_client(fake, uow_factory=worker),
     )
     try:
         yield p

@@ -22,6 +22,15 @@ LAUNCHER = "tests.reliability.support.pipeline_worker_main"
 N = 20
 
 
+def _replay_env(tmp_path: Path) -> dict[str, str]:
+    """The production composition builds the AI client from settings; replay mode never reaches the
+    network. The cassette directory is empty: these tests stop at normalization, and the extract
+    and index handlers that follow fail on a cassette miss without touching the normalized rows."""
+    cassettes = tmp_path / "cassettes"
+    cassettes.mkdir(exist_ok=True)
+    return {"API_AI_MODE": "replay", "API_AI_CASSETTE_DIR": str(cassettes)}
+
+
 async def _synced(p: Pipeline) -> Tenant:
     t = await p.tenant()
     p.feed(t).extend(world_v1_messages()[:N])
@@ -65,10 +74,17 @@ async def test_rt01_pipeline_crash_after_sync_commit_before_dispatch(
     async with pipeline(isolated_db) as p:
         await _synced(p)
         assert p.scalar("SELECT count(*) FROM outbox WHERE status = 'pending'") == N
-        crashed = start_worker(isolated_db, "dispatcher", tmp_path, crash=crash, launcher=LAUNCHER)
+        crashed = start_worker(
+            isolated_db,
+            "dispatcher",
+            tmp_path,
+            crash=crash,
+            launcher=LAUNCHER,
+            extra_env=_replay_env(tmp_path),
+        )
         assert crashed.wait_exit() == 97
         assert p.scalar("SELECT count(*) FROM messages") == 0
-        with running_worker(isolated_db, "all", tmp_path, launcher=LAUNCHER):
+        with running_worker(isolated_db, "all", tmp_path, launcher=LAUNCHER, extra_env=_replay_env(tmp_path)):
             wait_until(lambda: _settled(p), timeout=60)
         _assert_normalized_exactly_once(p)
 
@@ -79,10 +95,15 @@ async def test_rt01_pipeline_crash_inside_the_normalize_handler(
     async with pipeline(isolated_db) as p:
         await _synced(p)
         crashed = start_worker(
-            isolated_db, "all", tmp_path, crash="handler.after_consumption", launcher=LAUNCHER
+            isolated_db,
+            "all",
+            tmp_path,
+            crash="handler.after_consumption",
+            launcher=LAUNCHER,
+            extra_env=_replay_env(tmp_path),
         )
         assert crashed.wait_exit() == 97
         assert p.scalar("SELECT count(*) FROM event_consumptions") == 0  # rolled back with the handler
-        with running_worker(isolated_db, "all", tmp_path, launcher=LAUNCHER):
+        with running_worker(isolated_db, "all", tmp_path, launcher=LAUNCHER, extra_env=_replay_env(tmp_path)):
             wait_until(lambda: _settled(p), timeout=60)
         _assert_normalized_exactly_once(p)

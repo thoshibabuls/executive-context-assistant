@@ -1,4 +1,4 @@
-"""Exact privilege matrix after the slice 0.3 and 0.4 migrations.
+"""Exact privilege matrix at the migration head (slices 0.3 and 0.4, Batch A, Phases 1-4).
 
 BACKEND_DESIGN.md §7.6, "What the test asserts".
 
@@ -33,8 +33,9 @@ EXPECTED_TABLES: dict[str, dict[str, set[str]]] = {
     "ai_cost_rollups": {RUNTIME_ROLE: {"SELECT"}, WORKER_ROLE: set(DML)},
 }
 RLS_TABLES = ("outbox", "event_consumptions", "ai_calls", "ai_cost_rollups")
-# Batch A business tables: per-user isolation for all roles, DML for both runtime roles (§7.6).
+# User-owned business tables: per-user isolation for all roles, DML for both runtime roles (§7.6).
 BUSINESS_TABLES = (
+    # Batch A
     "organizations",
     "persons",
     "person_identifiers",
@@ -45,13 +46,53 @@ BUSINESS_TABLES = (
     "messages",
     "message_participants",
     "entity_mentions",
+    # Phase 1 (0006-0010)
+    "auth_sessions",
+    "deletion_jobs",
+    "idempotency_keys",
+    "extractions",
+    "work_items",
+    "evidence",
+    "item_evidence",
+    "decisions",
+    "context_events",
+    "feedback_events",
+    "meetings",
+    "meeting_participants",
+    # Phase 2 (0011-0017)
+    "chunks",
+    "entity_links",
+    "retrieval_traces",
+    "user_checkpoints",
+    "projects",
+    "project_members",
+    "chat_sessions",
+    "chat_messages",
+    # Phase 3 (0018-0023)
+    "reminders",
+    "notifications",
+    "push_subscriptions",
+    "briefings",
+    "priority_pairs",
+    "user_priority_weights",
+    # Phase 4 (0024-0027)
+    "recordings",
+    "transcript_segments",
 )
-# users: the API keeps DML on its own row; the worker has column SELECT only (§7.6 exception).
+# users: the API keeps DML on its own row; the worker has column SELECT only, plus DELETE of its
+# own deleting user's row (slice 1.9) (§7.6 exception).
 USERS_WORKER_COLUMNS = {"id", "status", "timezone", "work_hours"}
+# Sign-in tables (§7.6): oauth_states exists before a user is known (API only); audit_log is
+# API INSERT only, worker SELECT, INSERT, DELETE (retention, account deletion).
+EXPECTED_TABLES["oauth_states"] = {RUNTIME_ROLE: set(DML), WORKER_ROLE: set()}
+EXPECTED_TABLES["audit_log"] = {RUNTIME_ROLE: {"INSERT"}, WORKER_ROLE: {"SELECT", "INSERT", "DELETE"}}
+SIGNIN_RLS_TABLES = ("oauth_states", "audit_log")
 INFRASTRUCTURE_TABLES = set(EXPECTED_TABLES)
 for _table in BUSINESS_TABLES:
     EXPECTED_TABLES[_table] = {RUNTIME_ROLE: set(DML), WORKER_ROLE: set(DML)}
-EXPECTED_TABLES["users"] = {RUNTIME_ROLE: set(DML), WORKER_ROLE: set()}
+EXPECTED_TABLES["users"] = {RUNTIME_ROLE: set(DML), WORKER_ROLE: {"DELETE"}}
+# SECURITY DEFINER pre-authentication lookups: EXECUTE for the API role only (§7.6).
+DEFINER_FUNCTIONS = ("eca_signin_user_id(text,citext)", "eca_session_user_id(bytea)")
 
 
 def _table_privs(conn: psycopg.Connection, role: str, table: str) -> set[str]:
@@ -133,6 +174,20 @@ def _assert_matrix(admin_url: str) -> None:
             assert worker is True, fn
             assert api is (fn == "eca_current_user_id()"), fn
 
+        for fn in DEFINER_FUNCTIONS:
+            definer, public = conn.execute(
+                "SELECT p.prosecdef, (SELECT count(*) FROM aclexplode(coalesce(p.proacl, "
+                "acldefault('f', p.proowner))) a WHERE a.grantee = 0) FROM pg_proc p "
+                "WHERE p.oid = %s::regprocedure",
+                (fn,),
+            ).fetchone()  # type: ignore[misc]
+            assert (definer, public) == (True, 0), fn
+            api, worker = (
+                conn.execute("SELECT has_function_privilege(%s, %s, 'EXECUTE')", (r, fn)).fetchone()[0]  # type: ignore[index]
+                for r in (RUNTIME_ROLE, WORKER_ROLE)
+            )
+            assert (api, worker) == (True, False), fn
+
         # schema: USAGE, never CREATE
         for role in (RUNTIME_ROLE, WORKER_ROLE):
             usage, create = conn.execute(
@@ -164,6 +219,14 @@ def _assert_matrix(admin_url: str) -> None:
             )
         }
         assert rls == {t: (True, True) for t in RLS_TABLES}
+        signin_rls = {
+            r[0]: (r[1], r[2])
+            for r in conn.execute(
+                "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = ANY(%s)",
+                (list(SIGNIN_RLS_TABLES),),
+            )
+        }
+        assert signin_rls == {t: (True, True) for t in SIGNIN_RLS_TABLES}
         business_rls = {
             r[0]: (r[1], r[2])
             for r in conn.execute(
@@ -228,6 +291,24 @@ def _assert_matrix(admin_url: str) -> None:
                 "(id = eca_current_user_id())",
             ),
             ("users", "users_worker_enumerate", "SELECT", (WORKER_ROLE,), "true", None),
+            (
+                "users",
+                "users_worker_delete",
+                "DELETE",
+                (WORKER_ROLE,),
+                "((id = eca_current_user_id()) AND (status = 'deleting'::text))",
+                None,
+            ),
+            ("oauth_states", "oauth_states_api_all", "ALL", (RUNTIME_ROLE,), "true", "true"),
+            (
+                "audit_log",
+                "audit_log_api_insert",
+                "INSERT",
+                (RUNTIME_ROLE,),
+                None,
+                "((user_id IS NULL) OR (user_id = eca_current_user_id()))",
+            ),
+            ("audit_log", "audit_log_worker_all", "ALL", (WORKER_ROLE,), "true", "true"),
         }
 
         # 4. role attributes and separation

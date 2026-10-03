@@ -1,4 +1,7 @@
-"""Slice 1.3 on PostgreSQL: sync (fake connector) → source items → normalize → prefilter."""
+"""Slice 1.3 on PostgreSQL: sync (fake connector) → source items → normalize → prefilter.
+
+The pipeline runs every production handler, so relevant mail continues to AI-01 extraction and
+apply through ``tests.fake_ai.FakeProvider`` (minimal valid outputs unless a test scripts them)."""
 
 from __future__ import annotations
 
@@ -12,6 +15,8 @@ import pytest
 
 from eca.connectors import FakeConnectorFailure, FakeFeed, NormalizedMessage, NormalizedPerson
 from eca.ingestion import SYNC_REQUESTED, SyncRequested, reconcile_user_stages, sync_mail
+from eca.intelligence import ProviderRejected
+from eca.intelligence.provider.types import GenerateRequest
 from eca.people import find_by_email, merge_persons, merged_ids
 from eca.platform.events import NewEvent
 from eca.platform.outbox import publish
@@ -48,10 +53,11 @@ async def test_world_v1_sync_and_normalize(isolated_db: TempDatabase) -> None:
         await p.drain()
         assert p.scalar("SELECT count(*) FROM messages") == 150
         stages = dict(p.rows("SELECT stage, count(*) FROM source_items GROUP BY stage"))
-        assert set(stages) <= {"skipped", "extract_pending", "normalized"}
+        # Relevant mail is extracted and applied (fake AI-01); prefiltered mail stops at skipped.
+        assert set(stages) == {"skipped", "applied"}
         assert (
             p.scalar("SELECT count(*) FROM outbox WHERE event_type = 'MessageNormalized'")
-            == stages["extract_pending"]
+            == stages["applied"]
         )
         assert p.scalar("SELECT count(*) FROM persons WHERE is_self") == 1
         # Outbound mail is the user's own: direction outbound, never prefiltered.
@@ -368,8 +374,22 @@ async def test_identity_resolution_never_auto_merges(isolated_db: TempDatabase) 
             assert await merged_ids(uow, work.id) == sorted([work.id, home.id])
 
 
+def _triage_needs_reply(request: GenerateRequest) -> dict[str, object]:
+    return {
+        "gist": "Asks for the numbers.",
+        "triage": {
+            "category": "action",
+            "needs_reply": True,
+            "request_type": "provide_info",
+            "business_impact": "medium",
+            "confidence": 0.9,
+        },
+    }
+
+
 async def test_conversation_reply_state_follows_the_latest_message(isolated_db: TempDatabase) -> None:
     async with pipeline(isolated_db) as p:
+        p.fake_ai.responders["EmailExtraction"] = _triage_needs_reply
         t = await p.tenant()
         raj = ("Raj Menon", "raj.menon@kestrelbank.example")
         first = _msg("R1", raj, [AVERY], "Could you send the numbers?", 1)
@@ -377,7 +397,7 @@ async def test_conversation_reply_state_follows_the_latest_message(isolated_db: 
         await _sync(p, t)
         await p.drain()
         assert p.rows("SELECT awaiting, needs_reply, needs_reply_source FROM conversations") == [
-            ("user", True, "heuristic")
+            ("user", True, "triage")
         ]
         p.feed(t).add(
             _msg("R2", AVERY, [raj], "Sure, attached.", 2, reply_to=first.rfc822_id, thread=first.rfc822_id)
@@ -386,3 +406,29 @@ async def test_conversation_reply_state_follows_the_latest_message(isolated_db: 
         await p.drain()
         assert p.rows("SELECT awaiting, needs_reply FROM conversations") == [("other", False)]
         assert p.scalar("SELECT count(*) FROM messages WHERE direction = 'outbound'") == 1
+
+
+def _rejected(request: GenerateRequest) -> dict[str, object]:
+    raise ProviderRejected("synthetic rejection", code=400)
+
+
+async def test_needs_reply_falls_back_to_the_heuristic_when_triage_is_missing(
+    isolated_db: TempDatabase,
+) -> None:
+    """AI_PIPELINE.md §4.2 O1: when AI-01 fails, a deterministic heuristic sets ``needs_reply``,
+    labelled ``heuristic``; the failure leaves the normalized source data intact."""
+    async with pipeline(isolated_db) as p:
+        p.fake_ai.responders["EmailExtraction"] = _rejected
+        t = await p.tenant()
+        raj = ("Raj Menon", "raj.menon@kestrelbank.example")
+        p.feed(t).add(_msg("H1", raj, [AVERY], "Could you send the numbers?", 1))
+        await _sync(p, t)
+        await p.drain()
+        assert p.rows("SELECT awaiting, needs_reply, needs_reply_source FROM conversations") == [
+            ("user", True, "heuristic")
+        ]
+        assert p.rows("SELECT stage, last_error_code FROM source_items") == [
+            ("needs_attention", "ProviderRejected")
+        ]
+        assert p.scalar("SELECT count(*) FROM messages") == 1
+        assert p.scalar("SELECT count(*) FROM work_items") == 0
