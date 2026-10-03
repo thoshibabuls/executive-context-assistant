@@ -197,6 +197,8 @@ async def access_token(
     connection_id: UUID,
     capability: str,
 ) -> str:
+    """A fresh access token. Raises ``AuthRevoked`` on ``invalid_grant``; the caller then records it
+    with :func:`mark_needs_reauth` in a new transaction."""
     t = connections_table
     row = (
         await uow.session.execute(
@@ -212,17 +214,26 @@ async def access_token(
     if capability not in capabilities_for(tuple(row.granted_scopes)):
         raise PermissionDenied(f"capability {capability!r} not granted")
     refresh = crypto.decrypt(bytes(row.refresh_token_ciphertext), connection_id=connection_id)
-    try:
-        token = await refresh_access_token(
-            http, client_id=cfg.client_id, client_secret=cfg.client_secret, refresh_token=refresh
-        )
-    except AuthRevoked:
-        await uow.session.execute(
-            update(t).where(t.c.id == connection_id).values(status="needs_reauth", last_error="invalid_grant")
-        )
-        await _status_event(uow, connection_id, "needs_reauth")
-        raise
+    token = await refresh_access_token(
+        http, client_id=cfg.client_id, client_secret=cfg.client_secret, refresh_token=refresh
+    )
     return token.token
+
+
+async def mark_needs_reauth(uow: UnitOfWork, connection_id: UUID) -> None:
+    """``invalid_grant``: the connection needs a new consent (TECHNICAL_DESIGN.md §17.1). Called in
+    its own transaction, because the failing token request's transaction rolls back."""
+    t = connections_table
+    changed = (
+        await uow.session.execute(
+            update(t)
+            .where(t.c.id == connection_id, t.c.status == "active")
+            .values(status="needs_reauth", last_error="invalid_grant")
+            .returning(t.c.id)
+        )
+    ).scalar_one_or_none()
+    if changed is not None:
+        await _status_event(uow, connection_id, "needs_reauth")
 
 
 async def disconnect(

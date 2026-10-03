@@ -10,15 +10,19 @@ from __future__ import annotations
 
 import httpx
 
-from eca.connections import GoogleOAuthConfig, TokenCrypto, access_token
+from eca.connections import GoogleOAuthConfig, TokenCrypto, access_token, mark_needs_reauth
 from eca.connectors import ConnectionInfo, ConnectorRegistry, GmailConnector, GoogleCalendarConnector
 from eca.platform.config import Settings
+from eca.platform.errors import AuthRevoked
 from eca.platform.uow import UnitOfWorkFactory
 
 
 def build_connector_registry(
-    settings: Settings, uow_factory: UnitOfWorkFactory | None = None
+    settings: Settings,
+    uow_factory: UnitOfWorkFactory | None = None,
+    http: httpx.AsyncClient | None = None,
 ) -> ConnectorRegistry:
+    """``http``: the client for Google token and API calls (default: a new one for the process)."""
     registry = ConnectorRegistry()
     if (
         uow_factory is None
@@ -33,23 +37,28 @@ def build_connector_registry(
         settings.google_connect_redirect_uri,
     )
     crypto = TokenCrypto(settings.token_kek.get_secret_value(), version=settings.token_kek_version)
-    http = httpx.AsyncClient()
+    http = http or httpx.AsyncClient()
+
+    async def _token(factory: UnitOfWorkFactory, info: ConnectionInfo, capability: str) -> str:
+        try:
+            async with factory(user_id=info.user_id) as uow:
+                return await access_token(
+                    uow, cfg, crypto, http, connection_id=info.connection_id, capability=capability
+                )
+        except AuthRevoked:
+            async with factory(user_id=info.user_id) as uow:
+                await mark_needs_reauth(uow, info.connection_id)
+            raise
 
     def gmail(info: ConnectionInfo) -> GmailConnector:
         async def token() -> str:
-            async with uow_factory(user_id=info.user_id) as uow:
-                return await access_token(
-                    uow, cfg, crypto, http, connection_id=info.connection_id, capability="mail"
-                )
+            return await _token(uow_factory, info, "mail")
 
         return GmailConnector(http, token, account_email=info.account_email)
 
     def calendar(info: ConnectionInfo) -> GoogleCalendarConnector:
         async def token() -> str:
-            async with uow_factory(user_id=info.user_id) as uow:
-                return await access_token(
-                    uow, cfg, crypto, http, connection_id=info.connection_id, capability="calendar"
-                )
+            return await _token(uow_factory, info, "calendar")
 
         return GoogleCalendarConnector(http, token)
 

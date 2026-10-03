@@ -15,6 +15,7 @@ from eca.connections.google import (
     complete_connect,
     disconnect,
     list_connections,
+    mark_needs_reauth,
     start_connect,
     sync_states,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "get_cursor",
     "list_active_connections",
     "list_connections",
+    "mark_needs_reauth",
     "purge_connection",
     "purge_user",
     "release_after_failure",
