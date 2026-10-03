@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import any_, delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from eca.meetings.events import SPEAKER_MAPPING_CHANGED, SpeakerMappingChanged
@@ -37,14 +37,18 @@ INTRO_ATTENDEE = 0.95
 INTRO_OUTSIDE = 0.8
 ELIMINATION = 0.9
 INTRO_SEGMENTS = 3
+# The lead phrases match in any case ("This is", "my name is"); the name itself must be capitalized.
 _NAME = r"([A-Z][\w'\-]+(?:\s+[A-Z][\w'\-]+)?)"
 _INTRO = [
-    re.compile(rf"\b(?:I'm|I am|this is|my name is|it's)\s+{_NAME}"),
-    re.compile(rf"^(?:hi|hello|hey)?[,\s]*{_NAME}\s+here\b", re.IGNORECASE),
+    re.compile(rf"\b(?i:I'm|I am|this is|my name is|it's)\s+{_NAME}"),
+    re.compile(rf"^(?i:hi|hello|hey)?[,\s]*{_NAME}\s+(?i:here)\b"),
 ]
 _NOT_NAMES = frozenset(
-    {"here", "going", "sorry", "not", "just", "the", "a", "so", "on", "in", "back", "sure"}
-)
+    {
+        "here", "going", "sorry", "not", "just", "the", "a", "so", "on", "in", "back", "sure",
+        "everyone", "everybody", "all", "we", "we're", "i", "i'm", "it", "it's", "is", "you", "they",
+    }
+)  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -230,7 +234,7 @@ async def _remove_label(uow: UnitOfWork, meeting_id: UUID, label: str) -> None:
     mp = meeting_participants_table
     for r in await uow.session.execute(
         select(mp.c.person_id, mp.c.speaker_labels, mp.c.origin).where(
-            mp.c.meeting_id == meeting_id, mp.c.speaker_labels.any(label)
+            mp.c.user_id == uow.user_id, mp.c.meeting_id == meeting_id, any_(mp.c.speaker_labels) == label
         )
     ):
         remaining = [x for x in (r.speaker_labels or []) if x != label]

@@ -249,17 +249,19 @@ def validate_model_segments(
     segments: list[tuple[int, int, str, str]], *, duration_ms: int, offset_ms: int = 0, label_prefix: str = ""
 ) -> list[tuple[int, int, str, str]]:
     """AI_PIPELINE.md §5.10 validation: non-negative, ``end ≥ start``, within the duration + 2 s,
-    empty texts dropped, sorted by start. ``offset_ms``/``label_prefix`` place a 60-minute window."""
+    empty texts dropped, sorted by start. ``offset_ms``/``label_prefix`` place a 60-minute window:
+    the checks apply to the window-relative times (``duration_ms`` is the window's length), then the
+    offset moves the rows to the recording's timeline."""
     limit = duration_ms + TIMESTAMP_SLACK_MS
     out: list[tuple[int, int, str, str]] = []
     for start, end, speaker, text in segments:
         body = text.strip()
         if not body:
             continue
-        s, e = start + offset_ms, max(end, start) + offset_ms
-        if s < 0 or s > limit:
+        if start < 0 or start > limit:
             continue
-        out.append((s, min(e, limit), f"{label_prefix}{speaker.strip()}"[:MAX_LABEL_CHARS], body))
+        s, e = start + offset_ms, min(max(end, start), limit) + offset_ms
+        out.append((s, e, f"{label_prefix}{speaker.strip()}"[:MAX_LABEL_CHARS], body))
     out.sort(key=lambda x: (x[0], x[1]))
     return out
 

@@ -17,7 +17,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, select, update
+from sqlalchemy import any_, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from eca.communication.cleaning import clean_body, snippet
@@ -193,7 +193,7 @@ async def normalize_source_item(uow: UnitOfWork, source_item_id: UUID) -> Normal
             await uow.session.execute(
                 update(m)
                 .where(m.c.id == existing.id)
-                .where(~m.c.alias_source_item_ids.any(item.id))
+                .where(~(any_(m.c.alias_source_item_ids) == item.id))
                 .values(alias_source_item_ids=func.array_append(m.c.alias_source_item_ids, item.id))
             )
             await set_stage(uow, item.id, expected=("fetched",), new="normalized")
