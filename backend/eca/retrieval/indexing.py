@@ -443,8 +443,10 @@ async def index_source(
         skipped=report.skipped,
         embed_error=report.embed_error,
     )
-    if report.embed_error is not None and attempt + 1 < EMBED_CALL_CAP:
-        raise IndexRetry(report.embed_error)
+    # A budget refusal (hard cap or global budget) is final for today: the chunks stay FTS-only and
+    # the operator reembed path fills them later (AI_COST_MODEL.md §7.2). Other errors are retried.
+    if report.embed_error not in (None, "budget_exceeded") and attempt + 1 < EMBED_CALL_CAP:
+        raise IndexRetry(str(report.embed_error))
     return report
 
 
