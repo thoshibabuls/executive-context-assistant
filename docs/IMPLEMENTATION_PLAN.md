@@ -1,14 +1,14 @@
 # Implementation Plan — Executive Context Assistant
 
-**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete). Phase 1: code written, untested (§0.5). Phase 2: code complete, tests deferred (§0.6) — not complete until its tests and exit criteria pass. Phase 3: code complete, tests deferred (§0.7) — not complete until its tests and exit criteria pass. Phase 4: code complete, tests deferred (§0.8) — not complete until its tests and exit criteria pass. The MVP is not complete
-**Date:** 2026-10-02
+**Status:** Phases 0–4 are code complete and, since 2026-10-04, tested: the full backend suite passes locally (520 passed) and in CI, where every job is green for the first time, including `secrets` (§0.9). The MVP is **not** complete: the model-quality evaluations (E1–E16, the A5 release gate), the frozen `golden-v1.0`, the live smoke test and a real-Gmail demonstration are still open (§0.9, "Not verified")
+**Date:** 2026-10-04
 **Authority:** Execution order, slices, deliverables and exit criteria. Architecture is defined in `TECHNICAL_DESIGN.md` and the documents in its §5.1; this plan must not introduce behaviour or architecture that those documents do not describe (`CLAUDE.md`: "If implementation requires changing product behavior, stop and update the appropriate document first").
 
 ---
 
 ## 0. Implementation status
 
-Last updated 2026-10-03 (Phase 4 code complete, tests deferred, §0.8; Phase 3 code complete, tests deferred, §0.7; Phase 1 slices 1.1–1.9 code written and untested, §0.5; slice 0.3 locally verified; slices 0.4 and 0.5 implemented, local results in §0.4; CI run 2: lint and test pass, overall red because of the `secrets` job).
+Last updated 2026-10-04 (deferred tests written and run, defects fixed, CI green on every job, §0.9; the Phase 1–4 sections below describe the code-only state before that and are kept as history).
 
 | Slice | Code | Verification |
 |---|---|---|
@@ -17,6 +17,74 @@ Last updated 2026-10-03 (Phase 4 code complete, tests deferred, §0.8; Phase 3 c
 | 0.3 Reliability core | Implemented (commit `c5d7c0e`, "Slice 0.3: reliable event infrastructure") | **Locally verified**: exit criteria 1–4 met locally (§0.3), including 100 consecutive RT-01 + RT-05 runs. **Not "complete"**: CI has not run on this commit, and the `secrets` job bug (§0.1) keeps any run red |
 | 0.4 AI provider layer | Implemented (commit "Slice 0.4: AI provider layer") | Local gates pass (§0.4). **Exit not met**: the live smoke test has not run (no `GEMINI_API_KEY` in the build environment; it needs one run with a restricted key provided as an environment secret). Cassette replay determinism: met (tested) |
 | 0.5 Evaluation harness | Implemented (commit `95c06e4`) | Local gates pass (§0.4). Runner end to end on stubs: met. **Freeze of `golden-v0.1`: not done**: labels are draft and need the labelling owner's review (Q12); a candidate manifest (`frozen: false`) is committed |
+
+### 0.9 Test and fix pass (2026-10-03 to 2026-10-04)
+
+Environment: Windows 11, Python 3.11, PostgreSQL 16 with pgvector 0.8.5 (`ECA_TEST_DATABASE_URL` on port
+55432), ffmpeg 9.0; CI on GitHub Actions (PostgreSQL 17 service, Ubuntu ffmpeg). No live Gemini call was
+made: AI calls go to a deterministic in-process fake provider (`tests/fake_ai.py`) or to cassettes recorded
+from it, and every fixture is synthetic.
+
+**Results.** Full local suite: **520 passed, 0 failed, 1 deselected** (the `live` smoke test), 30 min.
+CI: run [37119773308](https://github.com/thoshibabuls/executive-context-assistant/actions/runs/37119773308)
+(commit `81e7dbc`) was the first run with every job green (`lint`, `test` 338 passed, `secrets` with the
+gitleaks history scan); every later push to `main` through `5d8e829` is green, including the new `image` job.
+Static checks (ruff, ruff format, mypy strict, lint-imports 15 contracts, web `tsc --noEmit`) pass on every
+commit through the pre-commit hooks.
+
+**The 16 failures carried since CI run 3** were all test bugs: the pipeline fixtures had no `AIClient` and ran
+whatever handlers earlier tests had imported (now the production registry with the fake provider); the RT-01
+crash workers built a live AI client without a key (now replay mode); the privilege matrix listed Batch A
+tables only (now every table through Phase 4, as BACKEND_DESIGN.md §7.6); the registry test assumed no
+production handlers. Two more failed only on Windows (CRLF in the evaluation writers, no graceful SIGTERM).
+
+**Code defects found by the new tests and fixed** (each commit says code bug or test bug):
+
+| Defect | Effect before the fix | Commit |
+|---|---|---|
+| Cassette key rejected `/` in prompt versions | Every real AI call (all roles) raised before the provider | `0f54f8a` |
+| R2 rebuild deleted all decisions, skipped meeting extractions, duplicated user-touched items | User corrections and meeting-derived state lost on rebuild | `7fd55d2` |
+| `needs_reauth` written in a transaction that then rolled back | Revoked connections stayed "active" | `f4c7551` |
+| `asyncio.create_subprocess_exec` under the Windows selector loop | Media pipeline unusable in Windows development | `7521332` |
+| Raw upload key was the prefix of the audio key | Prepared audio could never be stored (local adapter) | `7521332` |
+| Ogg output not bit-exact | AI-09 cassette key and provider-file identity changed every run | `7521332` |
+| AI-09 window validation applied the offset before the range check | Window fallback dropped almost every segment after the first hour | `14a1896` |
+| Speaker self-introductions case-sensitive; "everyone here" taken as a name | Missed or wrong deterministic speaker mappings | `14a1896` |
+| 403 instead of 401 for no session; 409 reasons dropped from Problem Details | Clients could not tell sign-in from forbidden, or `upload_incomplete`/`nothing_to_ask` | `e127e3f` |
+| `PATCH /work-items` with a date change | 500 (feedback JSON) | `5dc16f7` |
+| Indexing retried on a budget refusal | No FTS-only degradation under the global budget | `12ed064` |
+| Incremental Calendar sync without `singleEvents`; `Retry-After` ignored | Recurring events as series; provider backoff ignored | `751a56c` |
+| "in the last week" read as the previous calendar week | Wrong window (CONTEXT_ARCHITECTURE.md §7.1 says rolling) | `5d8e829` |
+| CI `secrets` job checksum step | Job failed before scanning since run 1 | `81e7dbc` |
+
+**Gaps built** (each documented first in the authoritative document): S4 chat preparation reads the stored
+prep sections (`e09afa9`); speaker confirmation re-points status signals with the §8.2 authority (`1b6f92f`);
+the deployment image with ffmpeg and a CI build/smoke job (`e27d20a`); Gmail Trash/Spam after import with
+`SourceItemTrashed`/`SourceItemRestored` and `ConversationStateChanged` (`1c9c287`); a lexical stand-in for
+candidate rule 3 until item embeddings exist (`17bd608`).
+
+**Deferred tests now written and passing**
+
+| Area | Tests |
+|---|---|
+| Reliability | RT-01 (both levels), RT-02, RT-02b, RT-03, RT-03b, RT-04, RT-05, RT-06, RT-07, RT-08, RT-09, RT-10 (mail and Phase 4 data), RT-11, RT-12, RT-13, RT-14, RT-15 (every `_user_isolation` table from the catalog, both runtime roles) |
+| Phase 1 | Auth flows with a mocked Google (PKCE, state, nonce, ID-token checks, CSRF, expiry, logout, re-auth for `DELETE /me`); connections (incremental scopes, encrypted tokens never returned or logged, denied scopes, revoke, `needs_reauth`); Gmail and Calendar contract tests (404, 410, 429 with `Retry-After`, quota 403, 5xx, label history); Work API (412, field-level 409, 422, `Idempotency-Key`, cursors, commands, 404 on other users' IDs); trash/restore; heuristic `needs_reply` fallback; CC-01–CC-10 at L2 through the real pipeline with placeholder AI answers |
+| Phase 2 | Chat API (sessions, SSE, replay, 20/min, grounding of AI claims); temporal resolver, planner rules, tsquery terms, diversity, ranking, packet budgets, chunking |
+| Phase 3 | Budget caps (per role soft/hard, VIP exemption, AI-02 daily cap, global budget, 429, audit rows, AI-01 deferral, FTS-only indexing); reminder rules (16 tests) |
+| Phase 4 | Unit tests (parsers, AI-09 validation, probe, windows, upload limits, speaker matching, upload tokens, local storage, transcript windows, grounding, prep key, asks, net-change diff); upload API (replay, dedupe, 10/hour, 409s, 404s); meeting page, speakers, prep, asks; ffmpeg path on generated media with record-then-replay cassettes, window fallback, rejections and limits; S4 from stored sections; status-signal re-pointing |
+
+**Not verified (the MVP is not complete until these pass):**
+- Model quality: E1–E16, X1–X10 and the A5 release gate need real model output on frozen, human-reviewed
+  labels; no live call was made (owner approval needed). The CC chains and suites above use placeholder answers.
+- `golden-v1.0` is not frozen (labels are draft; Q12) and the live smoke test has not run.
+- PRD §57 has not been demonstrated with a real Google account (sign-in, Gmail, Calendar).
+- Context suites L3–L5, S2/S4/S5 at suite level, CC-11 and later chains (no chain files exist yet), SS scripts.
+- Not yet covered by tests: change feed, day view and checkpoint routes; projects and topics; conversations
+  and people routes; Web Push against a stub push service; briefing, relationship-profile and priority-fitting
+  functions; the web app (no UI tests).
+- Known remaining gaps: the hosted storage adapter (Q1); no item embeddings (rule 3 is lexical); the
+  per-person follow-up override; the 120/min mutation limit; SQLAlchemy 2.1 deprecation warnings
+  (`distinct(expr)`).
 
 ### 0.5 Phase 1 code status (2026-10-02) — code written, NOT tested
 
