@@ -20,6 +20,7 @@ from eca.api.middleware import RequestIdMiddleware
 from eca.api.problems import install_problem_handlers
 from eca.api.projects import router as projects_router
 from eca.api.ratelimit import RateLimiter
+from eca.api.reminders import router as reminders_router
 from eca.api.work import router as work_router
 from eca.identity import JwksCache
 from eca.intelligence import AIClient, AIError, build_ai_client
@@ -110,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(assistant_router)
     app.include_router(projects_router)
     app.include_router(chat_router)
+    app.include_router(reminders_router)
     return app
 
 

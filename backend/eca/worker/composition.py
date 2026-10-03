@@ -47,7 +47,8 @@ def production_registry() -> EventRegistry:
 def production_resources(settings: Settings) -> Callable[[UnitOfWorkFactory], Resources]:
     """AI client from settings (``API_AI_MODE``: live, replay or record), the connectors, and for
     account deletion the token crypto (when ``TOKEN_KEK`` is set) and an HTTP client for token
-    revocation. The HTTP client lives as long as the worker process."""
+    revocation; the Web Push sender when the VAPID keys are set. The HTTP clients live as long as
+    the worker process."""
 
     def build(uow_factory: UnitOfWorkFactory) -> Resources:
         ai = eca.intelligence.build_ai_client(settings, uow_factory=uow_factory, global_budget=True)
@@ -57,6 +58,9 @@ def production_resources(settings: Settings) -> Callable[[UnitOfWorkFactory], Re
             ai,
             httpx.AsyncClient(timeout=30.0),
         ]
+        keys = eca.attention.VapidKeys.from_settings(settings)
+        if keys is not None:  # Web Push only with VAPID keys from the environment (TECHNICAL_DESIGN.md §15.4)
+            values.append(eca.attention.WebPushSender(keys, httpx.AsyncClient(timeout=15.0)))
         if settings.token_kek is not None:
             values.append(
                 eca.connections.TokenCrypto(

@@ -485,3 +485,38 @@ async def person_work(
             if r.project_hint and at is not None and at >= since:
                 hints[pid].append((r.project_hint, at))
     return {pid: PersonWork(mine[pid], theirs[pid], tuple(hints[pid])) for pid in ids}
+
+
+REMINDER_ITEMS_MAX = 1000
+
+
+async def open_items(uow: UnitOfWork, item_ids: Sequence[UUID] | None = None) -> list[WorkItemView]:
+    """Open, live, non-rejected items (reminder rules): all of the user's, or the given ones."""
+    t = work_items_table
+    stmt = _live_items(uow).where(t.c.lifecycle_status.in_(OPEN_STATES), ~t.c.archived)
+    if item_ids is not None:
+        if not item_ids:
+            return []
+        stmt = stmt.where(t.c.id.in_(list(item_ids)))
+    rows = await uow.session.execute(stmt.order_by(t.c.due_at.nulls_last(), t.c.id).limit(REMINDER_ITEMS_MAX))
+    return [_view(r) for r in rows]
+
+
+async def user_activity_since(
+    uow: UnitOfWork, entity_type: str, since: dict[UUID, datetime.datetime]
+) -> set[UUID]:
+    """Entities with a user event recorded after their own ``since`` (acted-upon detection, §15.2)."""
+    if not since:
+        return set()
+    c = context_events_table
+    rows = await uow.session.execute(
+        select(c.c.entity_id, func.max(c.c.recorded_at).label("at"))
+        .where(
+            c.c.user_id == uow.user_id,
+            c.c.entity_type == entity_type,
+            c.c.entity_id.in_(list(since)),
+            c.c.actor == "user",
+        )
+        .group_by(c.c.entity_id)
+    )
+    return {r.entity_id for r in rows if r.at > since[r.entity_id]}

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ItemCard } from "@/components/ItemCard";
+import { ReminderRow } from "@/components/ReminderRow";
 import { ApiError, api, unwrap } from "@/lib/api";
 import type { Conversation, Person, Today, WorkItem } from "@/lib/types";
 
@@ -97,6 +98,29 @@ export default function TodayPage() {
             ),
           )}
         </ul>
+      )}
+
+      {today.reminders.length > 0 && (
+        <>
+          <h2>Reminders</h2>
+          <ul>
+            {today.reminders.map((r) => (
+              <ReminderRow
+                key={r.id}
+                reminder={r}
+                onChange={(next) =>
+                  setToday({
+                    ...today,
+                    reminders:
+                      next.state === "delivered" || next.state === "snoozed"
+                        ? today.reminders.map((x) => (x.id === next.id ? next : x))
+                        : today.reminders.filter((x) => x.id !== next.id),
+                  })
+                }
+              />
+            ))}
+          </ul>
+        </>
       )}
 
       <h2>Meetings</h2>

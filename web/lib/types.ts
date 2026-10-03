@@ -71,6 +71,7 @@ export type Today = {
   needs_response: Conversation[];
   meetings: Meeting[];
   people: Record<string, Person>;
+  reminders: Reminder[];
 };
 
 export type Page<T> = { items: T[]; next_cursor: string | null };
@@ -175,3 +176,27 @@ export type PersonContext = PersonRow & {
   decisions: ContextCard[];
   notes: string[];
 };
+
+// Reminders and the notification center (slice 3.1). Reminders are deterministic rules
+// (origin "computed"); item_provenance labels the underlying item (AI suggestion or yours).
+export type Reminder = {
+  id: string;
+  item_type: "work_item" | "conversation" | "meeting";
+  item_id: string;
+  reminder_type: "deadline" | "overdue" | "commitment" | "waiting_for" | "follow_up" | "meeting_prep";
+  state: "pending" | "delivered" | "snoozed" | "dismissed" | "acted" | "suppressed" | "cancelled";
+  text: string;
+  fire_at: string;
+  delivered_at: string | null;
+  snoozed_until: string | null;
+  proactive: boolean | null;
+  item_provenance: {
+    origin: string;
+    verification_status: string;
+    confidence_band: string | null;
+    evidence_source_ids: string[];
+  } | null;
+  version: number;
+};
+
+export type AppNotification = { id: string; created_at: string; read_at: string | null; reminder: Reminder };

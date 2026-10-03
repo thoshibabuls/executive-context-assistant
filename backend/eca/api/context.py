@@ -28,6 +28,7 @@ from eca.api.common import (
     parse_if_match,
     request_key,
 )
+from eca.api.reminders import reminder_json
 from eca.api.work import item_json
 from eca.platform.errors import NotFound, ValidationFailed
 from eca.platform.feedback import record_feedback
@@ -435,6 +436,7 @@ async def today(user: User, factory: Factory) -> dict[str, Any]:
         "needs_response": [conversation_json(c) for c in t.needs_response],
         "meetings": jsonable_encoder(t.meetings),
         "people": {str(k): jsonable_encoder(v) for k, v in t.people.items()},
+        "reminders": [reminder_json(r) for r in t.reminders],
     }
 
 

@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     # then stop working across restarts and instances; set it in deployed environments).
     cursor_signing_key: SecretStr | None = None
 
+    # Web Push (slice 3.1, TECHNICAL_DESIGN.md §15.4): VAPID keys from the environment only
+    # (``eca ops vapid-keys`` creates a pair). Unset → Web Push disabled, in-app notifications only.
+    web_push_vapid_public_key: str | None = None
+    web_push_vapid_private_key: SecretStr | None = None
+    web_push_vapid_subject: str | None = None  # mailto: or https: contact
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.api_cors_origins.split(",") if o.strip()]

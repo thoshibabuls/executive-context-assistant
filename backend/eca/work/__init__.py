@@ -68,10 +68,12 @@ from eca.work.read import (
     item_ids_for_sources,
     items_by_ids,
     items_for_project,
+    open_items,
     person_work,
     project_hint_sources,
     search_decisions,
     search_items,
+    user_activity_since,
 )
 from eca.work.recompute import RecomputeReport, reapply_all, refold_all
 from eca.work.service import (
@@ -176,6 +178,7 @@ __all__ = [
     "list_items_page",
     "map_statement",
     "merge_items",
+    "open_items",
     "periodic_tasks",
     "person_work",
     "priority_candidates",
@@ -195,6 +198,7 @@ __all__ = [
     "sweep_all",
     "sweep_user",
     "timeline",
+    "user_activity_since",
     "user_dedupe_key",
     "user_edit",
     "verify_item",

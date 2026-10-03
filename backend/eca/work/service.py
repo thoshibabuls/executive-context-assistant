@@ -101,6 +101,7 @@ class WorkItemView:
     stale: bool = False
     created_at: datetime.datetime | None = None
     project_id: UUID | None = None
+    due_kind: str | None = None  # by | on | week (hard deadlines, TECHNICAL_DESIGN.md §15.4)
 
 
 def model_dedupe_key(extraction_id: UUID, index: int, event_type: str) -> bytes:
@@ -626,6 +627,7 @@ def _view(row: Any, sources: tuple[UUID, ...] = ()) -> WorkItemView:
         stale=bool(getattr(row, "stale", False)),
         created_at=getattr(row, "created_at", None),
         project_id=getattr(row, "project_id", None),
+        due_kind=getattr(row, "due_kind", None),
     )
 
 

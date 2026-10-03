@@ -727,6 +727,103 @@
     "title": "PostMessage",
     "type": "object"
    },
+   "PushSubscriptionBody": {
+    "description": "The browser's ``PushSubscription`` JSON; the encryption ``keys`` are accepted and ignored\n(pushes carry no payload, TECHNICAL_DESIGN.md \u00a715.4).",
+    "properties": {
+     "endpoint": {
+      "maxLength": 1000,
+      "minLength": 10,
+      "title": "Endpoint",
+      "type": "string"
+     },
+     "expirationTime": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Expirationtime"
+     }
+    },
+    "required": [
+     "endpoint"
+    ],
+    "title": "PushSubscriptionBody",
+    "type": "object"
+   },
+   "ReadBody": {
+    "additionalProperties": false,
+    "properties": {
+     "before": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Before"
+     },
+     "ids": {
+      "anyOf": [
+       {
+        "items": {
+         "format": "uuid",
+         "type": "string"
+        },
+        "maxItems": 200,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ids"
+     }
+    },
+    "title": "ReadBody",
+    "type": "object"
+   },
+   "SnoozeBody": {
+    "additionalProperties": false,
+    "properties": {
+     "preset": {
+      "anyOf": [
+       {
+        "enum": [
+         "1h",
+         "3h",
+         "tomorrow"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Preset"
+     },
+     "until": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Until"
+     }
+    },
+    "title": "SnoozeBody",
+    "type": "object"
+   },
    "ValidationError": {
     "properties": {
      "ctx": {
@@ -2144,6 +2241,120 @@
     "summary": "List Meetings"
    }
   },
+  "/api/v1/notifications": {
+   "get": {
+    "operationId": "list_notifications_api_v1_notifications_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "unread",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Unread",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Cursor"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response List Notifications Api V1 Notifications Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "List Notifications"
+   }
+  },
+  "/api/v1/notifications/read": {
+   "post": {
+    "operationId": "read_notifications_api_v1_notifications_read_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ReadBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Read Notifications Api V1 Notifications Read Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Read Notifications"
+   }
+  },
   "/api/v1/organizations": {
    "get": {
     "operationId": "list_organizations_api_v1_organizations_get",
@@ -2906,6 +3117,286 @@
      }
     },
     "summary": "Project Command"
+   }
+  },
+  "/api/v1/push-subscriptions": {
+   "post": {
+    "operationId": "create_push_subscription_api_v1_push_subscriptions_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PushSubscriptionBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Create Push Subscription Api V1 Push Subscriptions Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Create Push Subscription"
+   }
+  },
+  "/api/v1/push-subscriptions/key": {
+   "get": {
+    "description": "The VAPID public key for ``PushManager.subscribe``; 404 when Web Push is not configured.",
+    "operationId": "push_key_api_v1_push_subscriptions_key_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Push Key Api V1 Push Subscriptions Key Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Push Key"
+   }
+  },
+  "/api/v1/push-subscriptions/{subscription_id}": {
+   "delete": {
+    "operationId": "delete_push_subscription_api_v1_push_subscriptions__subscription_id__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "subscription_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Subscription Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete Push Subscription"
+   }
+  },
+  "/api/v1/reminders": {
+   "get": {
+    "operationId": "list_reminders_api_v1_reminders_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "state",
+      "required": false,
+      "schema": {
+       "default": "active",
+       "enum": [
+        "active",
+        "pending",
+        "all"
+       ],
+       "title": "State",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Cursor"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response List Reminders Api V1 Reminders Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "List Reminders"
+   }
+  },
+  "/api/v1/reminders/{reminder_id}/snooze": {
+   "post": {
+    "operationId": "snooze_reminder_api_v1_reminders__reminder_id__snooze_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "reminder_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Reminder Id",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SnoozeBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Snooze Reminder Api V1 Reminders  Reminder Id  Snooze Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Snooze Reminder"
+   }
+  },
+  "/api/v1/reminders/{reminder_id}/{command}": {
+   "post": {
+    "operationId": "reminder_command_api_v1_reminders__reminder_id___command__post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "reminder_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Reminder Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "command",
+      "required": true,
+      "schema": {
+       "enum": [
+        "dismiss",
+        "acted"
+       ],
+       "title": "Command",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Reminder Command Api V1 Reminders  Reminder Id   Command  Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Reminder Command"
    }
   },
   "/api/v1/sources/{source_item_id}": {

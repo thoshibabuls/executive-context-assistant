@@ -2,7 +2,9 @@
 
 Sections: attention (top items and conversations by priority), commitments (what the user
 owes), waiting-for (what others owe), meetings today, deadlines (overdue and next 7 days),
-needs-response, and newly detected suggestions. Every item keeps its provenance fields
+needs-response, newly detected suggestions and (Phase 3) the active reminders, including those
+delivered silently over the daily proactive cap (TECHNICAL_DESIGN.md §15.2: "others only in
+Today"). Every item keeps its provenance fields
 (``origin``, ``verification_status``, confidence band, evidence sources) so the page can label
 AI suggestions as such. Bounded lists; one query per section; names resolved in one batch.
 """
@@ -16,6 +18,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from eca import communication, meetings, people, work
+from eca.attention.reminders import ReminderView, list_reminders
 from eca.identity import get_user_settings
 from eca.platform.uow import UnitOfWork
 
@@ -38,6 +41,7 @@ class Today:
     meetings: list[meetings.MeetingView]
     people: dict[UUID, people.PersonRef]
     attention_items: dict[UUID, work.WorkItemView]
+    reminders: list[ReminderView]
 
 
 def _day_bounds(now: datetime.datetime, tz_name: str) -> tuple[datetime.datetime, datetime.datetime, str]:
@@ -90,6 +94,7 @@ async def build_today(uow: UnitOfWork, *, now: datetime.datetime) -> Today:
     }
     person_ids |= {p for m in todays_meetings for p in m.attendee_ids}
     persons = await people.get_persons(uow, sorted(person_ids))
+    reminders, _ = await list_reminders(uow, state="active", after=None, limit=SECTION_LIMIT, now=now)
     return Today(
         date=date,
         timezone=settings.timezone,
@@ -102,4 +107,5 @@ async def build_today(uow: UnitOfWork, *, now: datetime.datetime) -> Today:
         meetings=todays_meetings,
         people=persons,
         attention_items={i.id: i for i in by_priority.items},
+        reminders=reminders,
     )

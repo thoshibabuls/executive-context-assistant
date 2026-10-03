@@ -5,6 +5,9 @@ Runs as the worker role (``API_WORKER_DATABASE_URL``).
 - ``reembed`` (Phase 2): re-embed one user's chunks whose embedding model differs from the
   current AI-04 model, after an embedding model change (AI_PIPELINE.md §10). Never scheduled;
   ``--dry-run`` only counts.
+- ``vapid-keys`` (Phase 3): print a new Web Push VAPID key pair for the operator to store as
+  ``WEB_PUSH_VAPID_PUBLIC_KEY`` / ``WEB_PUSH_VAPID_PRIVATE_KEY`` in the secret manager
+  (TECHNICAL_DESIGN.md §15.4). Nothing is written to disk; needs no database.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from eca.attention import generate_keys
 from eca.intelligence import build_ai_client
 from eca.platform.config import Settings, get_settings
 from eca.platform.db import create_engine, create_session_factory
@@ -37,6 +41,7 @@ def _parser() -> argparse.ArgumentParser:
     reembed.add_argument("--user", type=UUID, required=True)
     reembed.add_argument("--limit", type=int, default=500)
     reembed.add_argument("--dry-run", action="store_true")
+    ops.add_parser("vapid-keys", help="print a new Web Push VAPID key pair (store it as secrets)")
     return parser
 
 
@@ -77,6 +82,12 @@ async def reembed(settings: Settings, user_id: UUID, limit: int, dry_run: bool) 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     ensure_selector_event_loop_policy()
+    if args.area == "vapid-keys":
+        public, private = generate_keys()
+        print(f"WEB_PUSH_VAPID_PUBLIC_KEY={public}")
+        print(f"WEB_PUSH_VAPID_PRIVATE_KEY={private}")
+        print("# Store both in the secret manager; never commit them. Set WEB_PUSH_VAPID_SUBJECT too.")
+        return 0
     if args.area == "reembed":
         print(asyncio.run(reembed(get_settings(), args.user, args.limit, args.dry_run)))
         return 0

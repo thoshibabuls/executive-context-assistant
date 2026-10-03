@@ -31,6 +31,7 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from eca import (
+    attention,
     chat,
     communication,
     connections,
@@ -111,6 +112,7 @@ async def _work_step(uow: UnitOfWork) -> None:
 
 _ACCOUNT_STEPS: tuple[tuple[str, Step], ...] = (
     ("chat", chat.purge_user),
+    ("attention", attention.purge_user),  # notifications, reminders (reference persons), push subscriptions
     ("retrieval", retrieval.purge_user),
     ("work", _work_step),
     ("communication", communication.purge_user),
@@ -317,6 +319,7 @@ async def run_retention(factory: UnitOfWorkFactory, *, now: datetime.datetime) -
             bodies += await communication.purge_bodies(uow, now=now)
             await retrieval.purge_unretained(uow)  # purged bodies are not retrievable (§9.7)
             await retrieval.purge_old_traces(uow, now=now)  # retrieval traces: 90 days (§6.2)
+            await attention.purge_expired(uow, now=now)  # notifications 30 days, closed reminders 90 (§17.6)
             await purge_expired_keys(uow, now=now)
     log.info("retention_done", users=len(user_ids), bodies=bodies, ai_calls=ai_deleted, outbox=outbox_deleted)
     return RetentionReport(len(user_ids), bodies, ai_deleted, outbox_deleted)

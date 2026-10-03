@@ -10,16 +10,29 @@ windows) and triage written by apply.
 Relationship profiles (Phase 3, CONTEXT_ARCHITECTURE.md §5.3): ``PersonChanged`` recomputes that
 person, ``MessageNormalized`` the message's participants (at most 10), and a nightly task every
 active person of every active user.
+
+Reminders (slice 3.1, BACKEND_DESIGN.md §15): ``evaluate_reminders`` handlers on
+``WorkItemChanged``, ``MessageNormalized`` and ``MeetingChanged`` under the advisory lock
+``rem:{entity}``; the 5-minute ``reminder_sweep`` (lock ``reminder_sweep``); the natural-key
+``attention.web_push`` handler on ``ReminderDue``.
 """
 
 from __future__ import annotations
 
 import datetime
 from functools import lru_cache
+from uuid import UUID
 
+from sqlalchemy import text
+
+from eca.attention.events import REMINDER_DUE, ReminderDue
 from eca.attention.priority import PriorityConfig
 from eca.attention.profiles import refresh_all, refresh_profiles
+from eca.attention.push import send_push
+from eca.attention.reminders import evaluate
+from eca.attention.reminders import sweep_all as reminder_sweep_all
 from eca.attention.service import recompute_conversations, recompute_items, sweep_all, sweep_user
+from eca.attention.webpush import WebPushSender
 from eca.communication import (
     MESSAGE_NORMALIZED,
     MessageNormalized,
@@ -31,11 +44,13 @@ from eca.people import PERSON_CHANGED, PersonChanged
 from eca.platform.clock import Clock
 from eca.platform.events import HandlerContext, handles
 from eca.platform.jobs import PeriodicTaskSpec
-from eca.platform.uow import UnitOfWorkFactory
+from eca.platform.uow import UnitOfWork, UnitOfWorkFactory
 from eca.work import WORK_ITEM_CHANGED, WorkItemChanged
 
 PRIORITY_SWEEP_TASK = "eca.attention.priority_sweep"
 PROFILES_TASK = "eca.attention.relationship_profiles"
+REMINDER_SWEEP_TASK = "eca.attention.reminder_sweep"
+_REM_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtextextended('rem:' || :entity, 0))")
 PROFILE_PARTICIPANTS = 10
 
 
@@ -91,6 +106,59 @@ async def on_message_profiles(ctx: HandlerContext) -> None:
         await refresh_profiles(ctx.tx, now=ctx.resources.get(Clock).now(), person_ids=participants)
 
 
+async def _rem_lock(uow: UnitOfWork, entity_id: UUID) -> None:
+    await uow.session.execute(_REM_LOCK_SQL, {"entity": str(entity_id)})
+
+
+@handles(WORK_ITEM_CHANGED, name="attention.reminders_item")
+async def on_item_reminders(ctx: HandlerContext) -> None:
+    payload = ctx.payload
+    assert isinstance(payload, WorkItemChanged)
+    await _rem_lock(ctx.tx, payload.work_item_id)
+    await evaluate(ctx.tx, now=ctx.resources.get(Clock).now(), item_ids=[payload.work_item_id])
+
+
+@handles(MESSAGE_NORMALIZED, name="attention.reminders_conversation")
+async def on_conversation_reminders(ctx: HandlerContext) -> None:
+    payload = ctx.payload
+    assert isinstance(payload, MessageNormalized)
+    conversation_id = await message_conversation_id(ctx.tx, payload.message_id)
+    if conversation_id is not None:
+        await _rem_lock(ctx.tx, conversation_id)
+        await evaluate(ctx.tx, now=ctx.resources.get(Clock).now(), conversation_ids=[conversation_id])
+
+
+@handles(MEETING_CHANGED, name="attention.reminders_meeting")
+async def on_meeting_reminders(ctx: HandlerContext) -> None:
+    payload = ctx.payload
+    assert isinstance(payload, MeetingChanged)
+    await _rem_lock(ctx.tx, payload.meeting_id)
+    await evaluate(ctx.tx, now=ctx.resources.get(Clock).now(), meeting_ids=[payload.meeting_id])
+
+
+@handles(REMINDER_DUE, name="attention.web_push", mode="natural_key")
+async def on_reminder_due(ctx: HandlerContext) -> None:
+    """The HTTP call to the push service runs outside any transaction (§7.4)."""
+    payload = ctx.payload
+    assert isinstance(payload, ReminderDue) and ctx.envelope.user_id is not None
+    try:
+        sender: WebPushSender | None = ctx.resources.get(WebPushSender)
+    except LookupError:
+        sender = None
+    await send_push(
+        ctx.factory,
+        sender,
+        user_id=ctx.envelope.user_id,
+        reminder_id=payload.reminder_id,
+        seq=payload.seq,
+        now=ctx.resources.get(Clock).now(),
+    )
+
+
+async def _reminders(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> None:
+    await reminder_sweep_all(uow_factory, now=now)
+
+
 async def _profiles(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> None:
     await refresh_all(uow_factory, now=now)
 
@@ -107,6 +175,13 @@ def periodic_tasks() -> list[PeriodicTaskSpec]:
             cron="*/15 * * * *",
             queue="schedule",
             run=_sweep,
+        ),
+        PeriodicTaskSpec(
+            name=REMINDER_SWEEP_TASK,
+            periodic_id="reminder_sweep",
+            cron="*/5 * * * *",
+            queue="schedule",
+            run=_reminders,
         ),
         PeriodicTaskSpec(
             name=PROFILES_TASK,
