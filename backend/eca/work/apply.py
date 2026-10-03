@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
@@ -39,7 +40,6 @@ from eca.people import (
     resolve_name,
 )
 from eca.platform.events import NewEvent
-from eca.platform.ids import uuid7
 from eca.platform.outbox import publish
 from eca.platform.uow import UnitOfWork
 from eca.work import confidence as conf
@@ -49,12 +49,15 @@ from eca.work.events import ADJUDICATION_NEEDED, AdjudicationNeeded
 from eca.work.mapping import authority, map_statement
 from eca.work.models import decisions_table
 from eca.work.service import (
+    Relink,
     add_evidence,
     append_event,
     create_item,
+    decision_id_for,
     evidence_id_for,
     link_evidence,
     model_dedupe_key,
+    replay_on_kept_item,
 )
 
 log = structlog.get_logger("eca.work.apply")
@@ -150,7 +153,16 @@ def _due_fields(res: DueResolution) -> dict[str, Any]:
     }
 
 
-async def apply_extraction(uow: UnitOfWork, extraction_id: UUID, *, now: datetime.datetime) -> ApplyReport:
+async def apply_extraction(
+    uow: UnitOfWork,
+    extraction_id: UUID,
+    *,
+    now: datetime.datetime,
+    relink: Mapping[UUID, Relink] | None = None,
+) -> ApplyReport:
+    """Apply one email extraction. ``relink`` (R2 only, BACKEND_DESIGN.md §8.5): evidence IDs
+    whose statement belonged to an item the rebuild kept; the statement's model event is replayed
+    on that item instead of matching or creating one."""
     await set_code_path(uow, "apply")
     await uow.session.execute(MERGE_LOCK_SQL, {"user_id": str(uow.user_id)})
     ext = await get_extraction(uow, extraction_id, for_update=True)
@@ -211,6 +223,61 @@ async def apply_extraction(uow: UnitOfWork, extraction_id: UUID, *, now: datetim
         auth = authority(
             speaker_id=speaker.id if speaker else None, owner_id=mapped.owner_id, strength=mapped.strength
         )
+        kept = (relink or {}).get(ev_id)
+        if kept is not None:
+            await add_evidence(
+                uow,
+                evidence_id=ev_id,
+                source_item_id=view.source_item_id,
+                extraction_id=ext.id,
+                index=idx,
+                quote=grounded.quote,
+                char_start=grounded.start,
+                occurred_at=view.sent_at,
+            )
+            await replay_on_kept_item(
+                uow,
+                kept,
+                ev_id=ev_id,
+                extraction_id=ext.id,
+                index=idx,
+                authority=auth,
+                occurred_at=view.sent_at,
+                by_person=speaker.id if speaker else None,
+                confidence=c.value,
+                penalties=list(c.penalties),
+                created_sets=_json(
+                    {
+                        "type": mapped.type,
+                        "title": st.action,
+                        "direction": mapped.direction,
+                        "owner_person_id": mapped.owner_id,
+                        "counterparty_person_id": mapped.counterparty_id,
+                        "requester_person_id": mapped.requester_id,
+                        "commitment_strength": mapped.strength,
+                        "statement_kind": st.statement_kind,
+                        "confidence": c.value,
+                        "confidence_band": c.band,
+                        "project_hint": out.project_hint,
+                        **_due_fields(due),
+                    }
+                ),
+                due_sets=_json(_due_fields(due)),
+                acceptance_sets=_json(
+                    {
+                        "type": "commitment",
+                        "statement_kind": "acceptance",
+                        "direction": "my_commitment"
+                        if speaker and speaker.id == self_p.id
+                        else "waiting_for",
+                        "commitment_strength": "explicit",
+                        **_due_fields(due),
+                    }
+                ),
+            )
+            report.updated.append(kept.item_id)
+            touched.add(kept.item_id)
+            continue
         target_id = _candidate(ext, st.candidate_id)
 
         if st.statement_kind == "acceptance" and target_id is None:
@@ -453,9 +520,10 @@ async def apply_extraction(uow: UnitOfWork, extraction_id: UUID, *, now: datetim
             occurred_at=view.sent_at,
         )
         c = conf.compute(dec.confidence, ["fuzzy_grounding"] if grounded.fuzzy else [])
-        decision_id = uuid7()
+        decision_id = decision_id_for(ext.id, idx)
         await uow.session.execute(
-            insert(decisions_table).values(
+            insert(decisions_table)
+            .values(
                 id=decision_id,
                 user_id=uow.user_id,
                 kind=dec.kind,
@@ -474,6 +542,7 @@ async def apply_extraction(uow: UnitOfWork, extraction_id: UUID, *, now: datetim
                 user_fields=[],
                 version=1,
             )
+            .on_conflict_do_nothing(index_elements=["id"])  # kept by R2 (user-touched)
         )
         await link_evidence(uow, "decision", decision_id, ev_id, "supports")
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -119,6 +120,12 @@ def system_dedupe_key(*parts: object) -> bytes:
 def evidence_id_for(extraction_id: UUID, index: int) -> UUID:
     """Deterministic evidence ID (BACKEND_DESIGN.md §10.1): R2 recreates the same IDs."""
     return uuid.uuid5(EVIDENCE_NAMESPACE, f"{extraction_id}:{index}")
+
+
+def decision_id_for(extraction_id: UUID, index: int) -> UUID:
+    """Deterministic ID of a decision or open question from an email extraction, so an R2 re-apply
+    finds a kept (user-touched) decision instead of creating a duplicate (BACKEND_DESIGN.md §8.5)."""
+    return uuid.uuid5(EVIDENCE_NAMESPACE, f"decision:{extraction_id}:{index}")
 
 
 def _jsonable(fields: dict[str, Any]) -> dict[str, Any]:
@@ -345,6 +352,81 @@ async def append_event(
         ),
     )
     return AppendResult(True, target, version)
+
+
+@dataclass(frozen=True)
+class Relink:
+    """A kept item's model event from one evidence row, recorded before an R2 rebuild deletes it."""
+
+    item_id: UUID
+    event_type: str  # created | restated | due_changed | accepted | ...
+    relation: str  # the item_evidence relation (supports | updates)
+
+
+async def kept_item_links(uow: UnitOfWork, item_ids: Sequence[UUID]) -> dict[UUID, Relink]:
+    """Evidence → (item, model event type, relation) of the given items (R2, §8.5)."""
+    if not item_ids:
+        return {}
+    ce, ie = context_events_table, item_evidence_table
+    events = {
+        r.evidence_id: r.event_type
+        for r in await uow.session.execute(
+            select(ce.c.evidence_id, ce.c.event_type).where(
+                ce.c.entity_type == "work_item",
+                ce.c.entity_id.in_(list(item_ids)),
+                ce.c.actor == "model",
+                ce.c.evidence_id.is_not(None),
+            )
+        )
+    }
+    out: dict[UUID, Relink] = {}
+    for r in await uow.session.execute(
+        select(ie.c.evidence_id, ie.c.item_id, ie.c.relation).where(
+            ie.c.item_type == "work_item", ie.c.item_id.in_(list(item_ids))
+        )
+    ):
+        if r.evidence_id in events:
+            out[r.evidence_id] = Relink(r.item_id, events[r.evidence_id], r.relation)
+    return out
+
+
+async def replay_on_kept_item(
+    uow: UnitOfWork,
+    kept: Relink,
+    *,
+    ev_id: UUID,
+    extraction_id: UUID,
+    index: int,
+    authority: int,
+    occurred_at: datetime.datetime,
+    by_person: UUID | None,
+    confidence: float,
+    penalties: list[str],
+    created_sets: dict[str, Any],
+    due_sets: dict[str, Any],
+    acceptance_sets: dict[str, Any],
+) -> None:
+    """Re-append a kept item's model event during R2 with the same dedupe key and evidence."""
+    sets = {
+        "created": created_sets,
+        "due_changed": due_sets,
+        "accepted": acceptance_sets,
+    }.get(kept.event_type, {})
+    await append_event(
+        uow,
+        item_id=kept.item_id,
+        event_type=kept.event_type,
+        actor="model",
+        authority=authority,
+        materiality={"created": 2, "due_changed": 3}.get(kept.event_type, 1),
+        occurred_at=occurred_at,
+        dedupe_key=model_dedupe_key(extraction_id, index, kept.event_type),
+        payload={"set": sets, "by_person": str(by_person) if by_person else None}
+        | ({} if kept.event_type == "created" else {"confidence": confidence, "penalties": penalties}),
+        evidence_id=ev_id,
+        extraction_id=extraction_id,
+    )
+    await link_evidence(uow, "work_item", kept.item_id, ev_id, kept.relation)
 
 
 async def _conflict_count(uow: UnitOfWork, item_id: UUID) -> int:

@@ -644,7 +644,7 @@ A retry of apply re-reads the stored output; it never calls the model (RT-02).
 | Level | What | AI calls | Procedure |
 |---|---|---|---|
 | R1 Re-fold | Recompute item/decision projections from `context_events` | 0 | Per item under row lock; idempotent |
-| R2 Re-apply | Rebuild AI-derived projections from stored extractions | 0 | Per user under the merge lock: keep SOURCE, COMPUTED inputs, USER-AUTHORED events and every item/decision that has a user event or `origin = user`; delete model/system events, evidence links and AI-only items/decisions; re-apply all `succeeded` extractions in `occurred_at` order (evidence IDs are deterministic, so they are recreated with the same IDs); R1 for all items |
+| R2 Re-apply | Rebuild AI-derived projections from stored extractions | 0 | Per user under the merge lock: keep SOURCE, COMPUTED inputs, USER-AUTHORED events and every item/decision that has a user event or `origin = user` (for decisions: user-edited fields or a user correction in `feedback_events`); delete model/system events, evidence links and AI-only items/decisions; re-apply all `succeeded` email and meeting extractions in source `occurred_at` order (evidence and decision IDs are deterministic, so they are recreated with the same IDs; a statement whose evidence belonged to a kept item replays its model event on that item instead of creating a new one); R1 for all items |
 | R3 Re-extract | New AI output for a window | AI-01/AI-10 | Costed, approved job; then R2 semantics via normal apply |
 | R4 Re-sync | Re-fetch from provider | 0 (provider quota) | Bounded window; idempotent upserts |
 

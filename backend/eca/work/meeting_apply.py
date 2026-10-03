@@ -18,7 +18,8 @@ User-authored values (authority 5) win in the fold; decision links the user set 
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -56,6 +57,7 @@ from eca.work.dates import DueResolution, guess_disagrees, resolve_due
 from eca.work.mapping import authority, map_statement
 from eca.work.models import decisions_table, item_evidence_table
 from eca.work.service import (
+    Relink,
     add_evidence,
     append_event,
     create_item,
@@ -63,6 +65,7 @@ from eca.work.service import (
     link_evidence,
     model_dedupe_key,
     record_entity_event,
+    replay_on_kept_item,
     user_dedupe_key,
 )
 
@@ -208,6 +211,7 @@ class _Context:
     participants: list[PersonRef]
     tz: str
     now: datetime.datetime
+    relink: Mapping[UUID, Relink] = field(default_factory=dict)  # R2 only (BACKEND_DESIGN.md §8.5)
 
 
 async def _statements(uow: UnitOfWork, c: _Context, report: ApplyReport) -> None:
@@ -262,6 +266,61 @@ async def _statements(uow: UnitOfWork, c: _Context, report: ApplyReport) -> None
         auth = authority(
             speaker_id=speaker.id if speaker else None, owner_id=mapped.owner_id, strength=mapped.strength
         )
+        kept = c.relink.get(ev_id)
+        if kept is not None:
+            await add_evidence(
+                uow,
+                evidence_id=ev_id,
+                source_item_id=c.ext.source_item_id,
+                extraction_id=c.ext.id,
+                index=idx,
+                quote=g.quote,
+                char_start=None,
+                occurred_at=occurred,
+                start_ms=g.start_ms,
+                end_ms=g.end_ms,
+            )
+            due_sets = _json(_due_fields(due))
+            await replay_on_kept_item(
+                uow,
+                kept,
+                ev_id=ev_id,
+                extraction_id=c.ext.id,
+                index=idx,
+                authority=auth,
+                occurred_at=occurred,
+                by_person=speaker.id if speaker else None,
+                confidence=score.value,
+                penalties=list(score.penalties),
+                created_sets=_json(
+                    {
+                        "type": mapped.type,
+                        "title": st.action,
+                        "direction": mapped.direction,
+                        "owner_person_id": mapped.owner_id,
+                        "counterparty_person_id": mapped.counterparty_id,
+                        "requester_person_id": mapped.requester_id,
+                        "commitment_strength": mapped.strength,
+                        "statement_kind": st.statement_kind,
+                        "confidence": score.value,
+                        "confidence_band": score.band,
+                        "project_hint": c.out.project_hint,
+                        **_due_fields(due),
+                    }
+                ),
+                due_sets=due_sets,
+                acceptance_sets=_json(
+                    {
+                        "type": "commitment",
+                        "statement_kind": "acceptance",
+                        "direction": mapped.direction,
+                        "commitment_strength": "explicit",
+                        **_due_fields(due),
+                    }
+                ),
+            )
+            report.updated.append(kept.item_id)
+            continue
         target_id = _candidate(c.ext, st.candidate_id, "work_item")
         ambiguous: list[Any] = []
         if target_id is None:
@@ -686,8 +745,13 @@ async def _people(
 
 
 async def apply_meeting_extraction(
-    uow: UnitOfWork, extraction_id: UUID, *, now: datetime.datetime
+    uow: UnitOfWork,
+    extraction_id: UUID,
+    *,
+    now: datetime.datetime,
+    relink: Mapping[UUID, Relink] | None = None,
 ) -> ApplyReport:
+    """Apply one meeting extraction; ``relink`` as in ``apply_extraction`` (R2 only)."""
     await set_code_path(uow, "apply")
     await uow.session.execute(MERGE_LOCK_SQL, {"user_id": str(uow.user_id)})
     ext = await get_extraction(uow, extraction_id, for_update=True)
@@ -725,6 +789,7 @@ async def apply_meeting_extraction(
         participants=participants,
         tz=(await get_user_settings(uow)).timezone,
         now=now,
+        relink=relink or {},
     )
     report = ApplyReport(applied=True)
     await _statements(uow, c, report)

@@ -546,6 +546,17 @@ async def defer_stage(
     )
 
 
+async def source_times(uow: UnitOfWork, source_item_ids: Sequence[UUID]) -> dict[UUID, datetime.datetime]:
+    """``occurred_at`` of the user's source items (R2 re-applies extractions in source order)."""
+    if not source_item_ids:
+        return {}
+    t = source_items_table
+    rows = await uow.session.execute(
+        select(t.c.id, t.c.occurred_at).where(t.c.user_id == uow.user_id, t.c.id.in_(list(source_item_ids)))
+    )
+    return {r.id: r.occurred_at for r in rows if r.occurred_at is not None}
+
+
 async def items_in_stage(uow: UnitOfWork, stage: str) -> list[UUID]:
     t = source_items_table
     rows = await uow.session.execute(
