@@ -15,6 +15,10 @@ Reminders (slice 3.1, BACKEND_DESIGN.md §15): ``evaluate_reminders`` handlers o
 ``WorkItemChanged``, ``MessageNormalized`` and ``MeetingChanged`` under the advisory lock
 ``rem:{entity}``; the 5-minute ``reminder_sweep`` (lock ``reminder_sweep``); the natural-key
 ``attention.web_push`` handler on ``ReminderDue``.
+
+Meeting prep (slice 4.4, ``attention.prep``): ``prep_meeting``, ``prep_item`` and ``prep_processed``
+recompute the sections of meetings starting within 24 h under ``prep:{meeting}``; the 15-minute
+``prep_sweep`` covers meetings starting in the next 60 minutes.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from sqlalchemy import text
 from eca.attention.briefing import on_briefing_due, schedule_all
 from eca.attention.events import BRIEFING_DUE, REMINDER_DUE, BriefingDue, ReminderDue
 from eca.attention.learning import fit_all
+from eca.attention.prep import PREP_HORIZON, prep_sweep_all, refresh_meetings, upcoming
 from eca.attention.priority import PriorityConfig
 from eca.attention.profiles import refresh_all, refresh_profiles
 from eca.attention.push import send_push
@@ -41,19 +46,20 @@ from eca.communication import (
     message_conversation_id,
     message_participant_ids,
 )
-from eca.meetings import MEETING_CHANGED, MeetingChanged
+from eca.meetings import MEETING_CHANGED, MEETING_PROCESSED, MeetingChanged, MeetingProcessed
 from eca.people import PERSON_CHANGED, PersonChanged
 from eca.platform.clock import Clock
 from eca.platform.events import HandlerContext, handles
 from eca.platform.jobs import PeriodicTaskSpec
 from eca.platform.uow import UnitOfWork, UnitOfWorkFactory
-from eca.work import WORK_ITEM_CHANGED, WorkItemChanged
+from eca.work import WORK_ITEM_CHANGED, WorkItemChanged, items_by_ids
 
 PRIORITY_SWEEP_TASK = "eca.attention.priority_sweep"
 PROFILES_TASK = "eca.attention.relationship_profiles"
 PRIORITY_FIT_TASK = "eca.attention.priority_fit"
 REMINDER_SWEEP_TASK = "eca.attention.reminder_sweep"
 BRIEFING_SCHEDULE_TASK = "eca.attention.briefing_schedule"
+PREP_SWEEP_TASK = "eca.attention.prep_sweep"
 _REM_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtextextended('rem:' || :entity, 0))")
 PROFILE_PARTICIPANTS = 10
 
@@ -183,6 +189,42 @@ async def _profiles(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> N
     await refresh_all(uow_factory, now=now)
 
 
+@handles(MEETING_CHANGED, name="attention.prep_meeting")
+async def on_meeting_prep(ctx: HandlerContext) -> None:
+    payload = ctx.payload
+    assert isinstance(payload, MeetingChanged)
+    now = ctx.resources.get(Clock).now()
+    if payload.meeting_id in await upcoming(ctx.tx, now=now, horizon=PREP_HORIZON):
+        await refresh_meetings(ctx.tx, [payload.meeting_id], now=now)
+
+
+@handles(WORK_ITEM_CHANGED, name="attention.prep_item")
+async def on_item_prep(ctx: HandlerContext) -> None:
+    payload = ctx.payload
+    assert isinstance(payload, WorkItemChanged)
+    now = ctx.resources.get(Clock).now()
+    found = await items_by_ids(ctx.tx, [payload.work_item_id], include_rejected=True)
+    people = {
+        p for i in found for p in (i.owner_person_id, i.counterparty_person_id, i.requester_person_id) if p
+    }
+    if people:
+        await refresh_meetings(
+            ctx.tx, await upcoming(ctx.tx, now=now, horizon=PREP_HORIZON, person_ids=people), now=now
+        )
+
+
+@handles(MEETING_PROCESSED, name="attention.prep_processed")
+async def on_meeting_processed(ctx: HandlerContext) -> None:
+    """A processed meeting changes decisions, questions and items of later meetings' prep."""
+    assert isinstance(ctx.payload, MeetingProcessed)
+    now = ctx.resources.get(Clock).now()
+    await refresh_meetings(ctx.tx, await upcoming(ctx.tx, now=now, horizon=PREP_HORIZON), now=now)
+
+
+async def _prep(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> None:
+    await prep_sweep_all(uow_factory, now=now)
+
+
 async def _sweep(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> None:
     await sweep_all(uow_factory, priority_config(), now=now)
 
@@ -223,5 +265,12 @@ def periodic_tasks() -> list[PeriodicTaskSpec]:
             cron="20 3 * * *",
             queue="schedule",
             run=_profiles,
+        ),
+        PeriodicTaskSpec(
+            name=PREP_SWEEP_TASK,
+            periodic_id="prep_sweep",
+            cron="*/15 * * * *",
+            queue="schedule",
+            run=_prep,
         ),
     ]

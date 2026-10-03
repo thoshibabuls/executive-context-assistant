@@ -16,6 +16,7 @@ from eca.attention.events import BRIEFING_DUE, REMINDER_DUE, BriefingDue, Remind
 from eca.attention.fitting import GLOBAL_BOUNDS, Fit, Pair, fit_multipliers
 from eca.attention.learning import config_for_user, fit_user
 from eca.attention.pairs import record_override_pairs
+from eca.attention.prep import PrepView, compute_prep, store_prep
 from eca.attention.priority import PriorityConfig, conversation_features, item_features, score
 from eca.attention.profiles import ProfileInputs, compute_profile, refresh_profiles
 from eca.attention.purge import purge_expired, purge_user
@@ -50,6 +51,7 @@ __all__ = [
     "Fit",
     "NotificationView",
     "Pair",
+    "PrepView",
     "PriorityConfig",
     "ProfileInputs",
     "ReminderDue",
@@ -59,6 +61,7 @@ __all__ = [
     "VapidKeys",
     "WebPushSender",
     "build_today",
+    "compute_prep",
     "compute_profile",
     "config_for_user",
     "conversation_features",
@@ -85,6 +88,7 @@ __all__ = [
     "refresh_profiles",
     "score",
     "snooze",
+    "store_prep",
     "subscribe",
     "sweep_all",
     "sweep_user",

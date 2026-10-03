@@ -30,6 +30,9 @@ CHECKPOINT_MAX_AGE = datetime.timedelta(days=14)
 CHECKPOINT_FALLBACK = datetime.timedelta(days=7)
 
 
+SINCE_LAST_MEETING = "since_last_meeting"
+
+
 @dataclass(frozen=True)
 class TimeWindow:
     start: datetime.datetime
@@ -147,6 +150,11 @@ def from_checkpoint(last_seen_at: datetime.datetime | None, now: datetime.dateti
 def extract_expression(question: str) -> tuple[str | None, bool]:
     """(time expression, is_since) found in a question by rules; ``(None, False)`` when none."""
     q = question.lower()
+    if re.search(r"\bsince (?:the |our |my )?(?:last|previous) meeting\b", q):
+        return (
+            SINCE_LAST_MEETING,
+            True,
+        )  # resolved against meetings at assembly (CONTEXT_ARCHITECTURE.md §9.11)
     m = re.search(r"\bsince (yesterday|today|last week|" + "|".join(WEEKDAYS) + r"|\d{4}-\d{2}-\d{2})\b", q)
     if m:
         return m.group(1), True

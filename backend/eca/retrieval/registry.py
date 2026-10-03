@@ -6,6 +6,7 @@ The planner selects one of these by intent; it never builds a query of its own.
 from __future__ import annotations
 
 from eca.retrieval.feed import what_changed, yesterday
+from eca.retrieval.meeting_retrievers import MEETING_RETRIEVERS
 from eca.retrieval.reply import reply_guidance
 from eca.retrieval.retrievers import RETRIEVERS, Retriever
 from eca.retrieval.topics import project_or_topic
@@ -18,4 +19,5 @@ def all_retrievers() -> dict[str, Retriever]:
         "day_view": yesterday,
         "project": project_or_topic,
         "reply_guidance": reply_guidance,
+        **MEETING_RETRIEVERS,
     }

@@ -127,6 +127,12 @@ export default function MeetingsPage() {
               <p className="meta">
                 {when(m.starts_at)}
                 {m.status === "cancelled" && " · cancelled"}
+                {m.status !== "cancelled" && new Date(m.starts_at).getTime() > Date.now() && (
+                  <>
+                    {" · "}
+                    <a href={`/meetings/${m.id}/prep`}>Prepare</a>
+                  </>
+                )}
               </p>
             </li>
           ))}

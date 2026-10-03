@@ -37,6 +37,7 @@ HEADINGS = {
     "person": "Context",
     "topic_status": "Related items",
     "project": "Project context",
+    "meeting_lookup": "From this meeting",
 }
 EMPTY = {
     "waiting_for": "Nobody owes you an open item that I can find.",
@@ -47,6 +48,7 @@ EMPTY = {
     "deadlines": "No deadline falls in this period.",
     "day_view": "No material activity was recorded for that day.",
     "what_changed": "No material change was recorded.",
+    "meeting_lookup": "No action items, decisions or open questions were found for this meeting.",
 }
 KIND_PREFIX = {
     "inference": "Inferred: ",

@@ -32,8 +32,7 @@ from eca.retrieval.traces import record_trace
 TURN_TOKENS = 300
 SESSION_TOKENS = 1500
 PRIOR_MEETINGS = 2
-PRIOR_MEETING_WINDOW = datetime.timedelta(days=60)
-PRIOR_OVERLAP = 0.5
+LAST_MEETING_LOOKBACK = datetime.timedelta(days=90)
 
 
 @dataclass(frozen=True)
@@ -75,8 +74,8 @@ async def embed_question(
 
 
 def plan_window(plan: Plan, now: datetime.datetime, tz_name: str) -> TimeWindow | None:
-    if not plan.time_expression:
-        return None
+    if not plan.time_expression or plan.time_expression == temporal.SINCE_LAST_MEETING:
+        return None  # since_last_meeting is resolved against meetings in ``context_for``
     if plan.since:
         return temporal.since(plan.time_expression, now, tz_name)
     return temporal.resolve(plan.time_expression, now, tz_name)
@@ -85,31 +84,41 @@ def plan_window(plan: Plan, now: datetime.datetime, tz_name: str) -> TimeWindow 
 async def session_sources(
     uow: UnitOfWork, scope: SessionScope, now: datetime.datetime
 ) -> tuple[UUID, ...] | None:
-    """Meeting scope (§9.7, §9.10): the meeting's source plus up to 2 prior meetings."""
+    """Meeting scope (§9.7, §9.11): the meeting's own sources (calendar event and recording) plus
+    those of up to 2 prior related meetings (series, participant overlap, title similarity)."""
     if scope.kind != "meeting" or scope.meeting_id is None:
         return None
-    found = await meetings.get_meeting_details(uow, [scope.meeting_id])
-    if not found:
+    m = await meetings.meeting_record(uow, scope.meeting_id)
+    if m is None:
         return ()
-    m = found[0]
-    earlier = await meetings.meeting_details_between(
-        uow, m.starts_at - PRIOR_MEETING_WINDOW, m.starts_at, include_cancelled=False, limit=200
+    prior = await meetings.prior_meetings(uow, m.id, limit=PRIOR_MEETINGS)
+    ids = {m.source_item_id, *(o.source_item_id for o in prior)}
+    for meeting_id in [m.id, *(o.id for o in prior)]:
+        rec = await meetings.recording_for_meeting(uow, meeting_id)
+        if rec is not None and rec.source_item_id is not None:
+            ids.add(rec.source_item_id)
+    return tuple(sorted(ids))
+
+
+async def last_meeting_window(
+    uow: UnitOfWork, plan: Plan, now: datetime.datetime, tz: ZoneInfo
+) -> TimeWindow | None:
+    """``since_last_meeting`` (§9.11): from the end of the most recent meeting that ended before
+    now (not cancelled), with the named person when one is given (the first match)."""
+    person_ids: list[UUID] = []
+    for name in plan.person_names[:1]:
+        matches = await people.match_names(uow, name, limit=1)
+        if matches:
+            person_ids.append(matches[0].person.id)
+    past = await meetings.meeting_details_between(
+        uow, now - LAST_MEETING_LOOKBACK, now, person_ids=person_ids or None, limit=200
     )
-    attendees = set(m.attendee_ids)
-
-    def related(o: meetings.MeetingDetail) -> bool:
-        if o.id == m.id or o.ends_at > m.starts_at:
-            return False
-        if m.series_key and o.series_key == m.series_key:
-            return True
-        other = set(o.attendee_ids)
-        return (
-            bool(attendees and other)
-            and len(attendees & other) / min(len(attendees), len(other)) >= PRIOR_OVERLAP
-        )
-
-    prior = [o for o in earlier if related(o)][-PRIOR_MEETINGS:]
-    return tuple(sorted({m.source_item_id, *(o.source_item_id for o in prior)}))
+    held = [m for m in past if m.ends_at <= now and m.status != "cancelled"]
+    if not held:
+        return None
+    last = max(held, key=lambda m: (m.ends_at, str(m.id)))
+    label = f"since {last.title or 'the last meeting'} ({fmt_date(last.ends_at, tz, with_time=True)})"
+    return TimeWindow(last.ends_at, now, label, "meeting")
 
 
 def render_session(session: SessionState) -> str:
@@ -150,6 +159,14 @@ async def context_for(
     self_p = await people.get_self_person(uow)
     states = await connections.sync_states(uow)
     window = plan_window(plan, now, settings.timezone)
+    if plan.time_expression == temporal.SINCE_LAST_MEETING:
+        window = await last_meeting_window(uow, plan, now, tz)
+        if window is None:
+            window = temporal.since("recently", now, settings.timezone)
+            if window is not None:
+                window = TimeWindow(
+                    window.start, window.end, window.label, window.basis, "No earlier meeting was found."
+                )
     excluded = tuple(
         sorted(s.connection_id for s in states if s.provider == "google" and "calendar" not in s.capabilities)
     )

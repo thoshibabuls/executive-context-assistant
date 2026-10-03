@@ -5,8 +5,9 @@ storage adapter's signed PUT target, complete, status, list, retry, meeting link
 dialog's meeting suggestions. Slice 4.3: the meeting page and missed-meeting view
 (``GET /meetings/{id}``, deterministic reads) and speaker confirmation (``PUT
 /meetings/{id}/speakers``: ``meetings.set_speaker_mapping`` and ``work.remap_speaker_items`` in one
-transaction, authority 5). Statuses and limits are decided in the domain modules; this module only
-maps them to HTTP.
+transaction, authority 5). Slice 4.4: the prep view (``GET /meetings/{id}/prep``, deterministic)
+and the once-per-version AI-11 request (``POST /meetings/{id}/prep/asks``). Statuses and limits
+are decided in the domain modules; this module only maps them to HTTP.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from eca import meetings, people, work
+from eca import attention, meetings, people, work
 from eca.api.chat import _limiter as limiter
 from eca.api.common import (
     Cursors,
@@ -39,7 +40,7 @@ from eca.api.common import (
 )
 from eca.api.problems import problem_response
 from eca.api.work import decision_json, evidence_json, item_json
-from eca.platform.errors import NotFound, UpstreamUnavailable, ValidationFailed
+from eca.platform.errors import Conflict, NotFound, UpstreamUnavailable, ValidationFailed
 from eca.platform.feedback import record_feedback
 from eca.platform.storage import LocalObjectStorage, ObjectStorage
 from eca.platform.uow import UnitOfWork
@@ -498,3 +499,63 @@ async def put_speakers(
     return JSONResponse(
         {"speakers": speakers, "version": record.version}, headers={"ETag": etag(record.version)}
     )
+
+
+# ---------------------------------------------------------------- prep (slice 4.4)
+
+
+def _asks_json(asks: dict[str, Any]) -> dict[str, Any]:
+    """AI-11 asks are recommendations: labelled, with provenance, never phrased as fact."""
+    return {
+        "version": asks.get("version"),
+        "status": asks.get("status", "not_requested"),
+        "label": "AI suggestions",
+        "items": asks.get("items") or [],
+        "provenance": asks.get("provenance"),
+    }
+
+
+async def _prep_body(uow: UnitOfWork, meeting_id: UUID) -> dict[str, Any]:
+    """Sections computed at read time; asks only when they belong to the current key."""
+    view = await attention.compute_prep(uow, meeting_id, now=now())
+    if view is None:
+        raise NotFound("meeting not found")
+    stored = await meetings.get_prep(uow, meeting_id)
+    current = stored is not None and stored.key == view.key
+    asks = stored.asks if current and stored is not None else {"status": "not_requested", "items": []}
+    return {
+        "meeting_id": str(meeting_id),
+        "key": view.key,
+        "version": stored.version if current and stored is not None else None,
+        "empty": view.empty,
+        "sections": view.sections,
+        "asks": _asks_json(asks),
+    }
+
+
+@router.get("/meetings/{meeting_id}/prep")
+async def get_meeting_prep(meeting_id: UUID, user: User, factory: Factory) -> dict[str, Any]:
+    """The prep view (BACKEND_DESIGN.md §16.9): deterministic sections, no model call, no write."""
+    async with factory(user_id=user.user_id) as uow:
+        return await _prep_body(uow, meeting_id)
+
+
+@router.post("/meetings/{meeting_id}/prep/asks", status_code=202)
+async def request_meeting_asks(meeting_id: UUID, user: User, factory: Factory) -> JSONResponse:
+    """The web app calls this when the prep view opens with non-empty sections: the sections are
+    stored for the current key and AI-11 is requested once per version (202), or the stored asks
+    are returned (200). 409 ``nothing_to_ask`` when the sections are empty (no AI-11 call)."""
+    at = now()
+    async with factory(user_id=user.user_id) as uow:
+        view = await attention.compute_prep(uow, meeting_id, now=at)
+        if view is None:
+            raise NotFound("meeting not found")
+        if view.empty:
+            raise Conflict(
+                "there is nothing to prepare for this meeting", details={"reason": "nothing_to_ask"}
+            )
+        version = await attention.store_prep(uow, view, now=at)
+        prep = await meetings.request_asks(uow, meeting_id, version=version)
+        body = await _prep_body(uow, meeting_id)
+    status = 202 if prep is None or prep.asks["status"] == "pending" else 200
+    return JSONResponse(body, status_code=status)

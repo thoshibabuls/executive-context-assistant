@@ -1,7 +1,8 @@
 """Retrieval handlers: the index job on ``MessageNormalized``, ``MeetingChanged``, (Phase 4)
 ``TranscriptStored`` and ``SpeakerMappingChanged``, chunk removal on ``SourceItemDeleted``
 (BACKEND_DESIGN.md §15). Phase 3: AI-03 on ``ThreadSummaryDue`` (natural key, queue ``extract``)
-and the 5-minute ``thread_summary_sweep``."""
+and the 5-minute ``thread_summary_sweep``. Phase 4: AI-11 suggested asks on
+``MeetingAsksRequested`` (natural key, queue ``ai_standard``)."""
 
 from __future__ import annotations
 
@@ -12,9 +13,11 @@ from eca.communication import MESSAGE_NORMALIZED, MessageNormalized
 from eca.ingestion import SOURCE_ITEM_DELETED, SourceItemDeleted
 from eca.intelligence import AIClient
 from eca.meetings import (
+    MEETING_ASKS_REQUESTED,
     MEETING_CHANGED,
     SPEAKER_MAPPING_CHANGED,
     TRANSCRIPT_STORED,
+    MeetingAsksRequested,
     MeetingChanged,
     SpeakerMappingChanged,
     TranscriptStored,
@@ -24,6 +27,7 @@ from eca.platform.events import HandlerContext, handles
 from eca.platform.jobs import PeriodicTaskSpec
 from eca.platform.uow import UnitOfWork, UnitOfWorkFactory
 from eca.retrieval import summaries
+from eca.retrieval.asks import generate_asks
 from eca.retrieval.events import THREAD_SUMMARY_DUE, ThreadSummaryDue
 from eca.retrieval.indexing import (
     IndexTarget,
@@ -40,6 +44,7 @@ INDEX_REMOVED_HANDLER = "retrieval.index_removed"
 INDEX_TRANSCRIPT_HANDLER = "retrieval.index_transcript"
 INDEX_SPEAKERS_HANDLER = "retrieval.index_speakers"
 THREAD_SUMMARY_HANDLER = "retrieval.thread_summary"
+MEETING_ASKS_HANDLER = "retrieval.meeting_asks"
 THREAD_SUMMARY_SWEEP_TASK = "eca.retrieval.thread_summary_sweep"
 
 
@@ -137,6 +142,21 @@ async def on_thread_summary_due(ctx: HandlerContext) -> None:
         user_id=ctx.envelope.user_id,
         conversation_id=payload.conversation_id,
         through_message_id=payload.through_message_id,
+        now=_now(ctx),
+    )
+
+
+@handles(MEETING_ASKS_REQUESTED, name=MEETING_ASKS_HANDLER, queue="ai_standard", mode="natural_key")
+async def on_meeting_asks_requested(ctx: HandlerContext) -> None:
+    """AI-11 once per meeting prep version (BACKEND_DESIGN.md §15 Phase 4 jobs)."""
+    payload = ctx.payload
+    assert isinstance(payload, MeetingAsksRequested) and ctx.envelope.user_id is not None
+    await generate_asks(
+        ctx.factory,
+        ctx.resources.get(AIClient),
+        user_id=ctx.envelope.user_id,
+        meeting_id=payload.meeting_id,
+        version=payload.version,
         now=_now(ctx),
     )
 

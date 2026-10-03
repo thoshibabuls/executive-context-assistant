@@ -10,6 +10,7 @@ from eca.intelligence.output_schemas.email_extract import (
     StatusSignal,
     Triage,
 )
+from eca.intelligence.output_schemas.meeting_asks import Ask, MeetingAsks
 from eca.intelligence.output_schemas.meeting_extract import (
     Concern,
     MeetingDecision,
@@ -28,10 +29,12 @@ __all__ = [
     "Adjudication",
     "Answer",
     "AnswerClaim",
+    "Ask",
     "Concern",
     "DecisionOut",
     "EmailExtraction",
     "KeyPoint",
+    "MeetingAsks",
     "MeetingDecision",
     "MeetingExtraction",
     "MeetingSignal",

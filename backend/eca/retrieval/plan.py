@@ -28,6 +28,11 @@ Intent = Literal[
     "next_action",
     "email_context",
     "reply_guidance",
+    "meeting_prep",
+    "cross_meeting",
+    "meeting_lookup",
+    "meeting_transcript",
+    "meeting_synthesis",
     "unsupported",
 ]
 Tier = Literal["deterministic", "T1", "T2"]
@@ -47,6 +52,12 @@ INTENT_SCENARIO: dict[str, str] = {
     "next_action": "S12",
     "email_context": "S1",
     "reply_guidance": "RG",
+    # Phase 4 (CONTEXT_ARCHITECTURE.md §9.11): meeting intents come from rules only.
+    "meeting_prep": "S4",
+    "cross_meeting": "S5",
+    "meeting_lookup": "MQ",
+    "meeting_transcript": "MQ",
+    "meeting_synthesis": "S5",
     "unsupported": "none",
 }
 INTENT_TIER: dict[str, Tier] = {
@@ -64,12 +75,20 @@ INTENT_TIER: dict[str, Tier] = {
     "next_action": "T2",
     "email_context": "deterministic",
     "reply_guidance": "T2",
+    "meeting_prep": "T2",
+    "cross_meeting": "T2",
+    "meeting_lookup": "deterministic",
+    "meeting_transcript": "T1",
+    "meeting_synthesis": "T2",
     "unsupported": "deterministic",
 }
 LIST_INTENTS = frozenset(
     {"waiting_for", "promised", "who_waiting_on_me", "needs_response", "overdue", "deadlines", "day_view"}
 )
-DISCOVERY_INTENTS = frozenset({"topic_status", "project"})
+DISCOVERY_INTENTS = frozenset(
+    {"topic_status", "project", "meeting_transcript", "meeting_synthesis", "cross_meeting"}
+)
+MEETING_SESSION_INTENTS = frozenset({"meeting_lookup", "meeting_transcript", "meeting_synthesis"})
 
 
 @dataclass(frozen=True)
@@ -87,6 +106,7 @@ class Plan:
     conversation_id: UUID | None = None
     qualifier: str | None = None  # topic qualifier of a list intent ("promised ... about the budget")
     confidence: float = 1.0
+    meeting_id: UUID | None = None  # Phase 4: the meeting a meeting intent is about (session scope)
 
     @property
     def scenario(self) -> str:
@@ -113,6 +133,7 @@ class Plan:
             "since": self.since,
             "has_qualifier": self.qualifier is not None,
             "conversation_anchor": self.conversation_id is not None,
+            "meeting_anchor": self.meeting_id is not None,
             "confidence": self.confidence,
         }
 

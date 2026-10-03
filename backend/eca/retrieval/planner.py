@@ -264,6 +264,83 @@ _RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
 )
 
 
+# Phase 4 meeting rules (AI_PIPELINE.md §5.10 "Meeting Q&A routing"): rules only; AI-05 unchanged.
+_MEETING_PREP = re.compile(
+    r"\bprep(?:are)? (?:me )?(?:for|before)\b|\bbrief me (?:for|before|on)\b|\bbefore (?:my|the|our) "
+    r"(?:next )?(?:meeting|call|1:1|sync)\b|\bget ready for\b|\bwhat should i (?:ask|raise|bring up)\b",
+    re.I,
+)
+_CROSS_MEETING = re.compile(
+    r"\bacross (?:the |our |all )?(?:last |previous |past )?(?:\w+ )?meetings\b|\bover the (?:last|past) "
+    r"(?:\w+ )?meetings\b|\bin (?:the |our )?(?:previous|earlier|past) meetings\b|"
+    r"\bhow (?:has|have) .+? (?:evolved|changed) (?:across|over)\b",
+    re.I,
+)
+_MEETING_LOOKUP = re.compile(
+    r"\baction items?\b|\bnext steps\b|\bwhat was (?:decided|agreed)\b|\bwhat did we (?:decide|agree)\b|"
+    r"\bdecisions?\b|\bopen questions?\b|\bwho (?:owns|is responsible|will|has to|took)\b|\bwho owes\b|"
+    r"\bwhat do i (?:owe|need to do)\b|\bmy (?:tasks|action items)\b|\btakeaways?\b",
+    re.I,
+)
+_MEETING_TRANSCRIPT = re.compile(
+    r"\bwhat did \w[\w'\-]*(?: \w[\w'\-]*)? (?:say|mention|ask|suggest|propose)\b|"
+    r"\bwho (?:said|mentioned|asked|suggested|raised)\b|"
+    r"\bdid (?:anyone|anybody|someone|\w+) (?:say|mention|bring up|talk about)\b|"
+    r"\bexact words\b|\bquote\b|\bwhen did .+? (?:say|mention)\b",
+    re.I,
+)
+_MEETING_SYNTHESIS = re.compile(
+    r"\bconcerns?\b|\brisks?\b|\bsummar(?:y|ise|ize)\b|\bmain (?:points|topics)\b|\bhow did (?:it|the "
+    r"meeting) go\b|\bwhat (?:was|were) (?:discussed|the key)\b|\bwhat happened in\b|\btl;?dr\b|\bgist\b",
+    re.I,
+)
+
+
+def plan_meeting(question: str, *, meeting_id: UUID | None) -> Plan | None:
+    """Meeting intents by rules (Phase 4). In a meeting-scoped session the lookup, transcript and
+    synthesis intents apply to that meeting; prep and cross-meeting questions apply anywhere."""
+    expression, since = extract_expression(question)
+    names = candidate_names(question)
+    topic = _topic(question)
+    if meeting_id is not None:
+        for pattern, intent in (
+            (_MEETING_TRANSCRIPT, "meeting_transcript"),
+            (_MEETING_SYNTHESIS, "meeting_synthesis"),
+            (_MEETING_LOOKUP, "meeting_lookup"),
+        ):
+            if pattern.search(question):
+                return Plan(
+                    intent=intent,
+                    planner="rules",
+                    person_names=tuple(names),
+                    topic=topic,
+                    time_expression=expression,
+                    since=since,
+                    meeting_id=meeting_id,
+                )
+    if _MEETING_PREP.search(question):
+        return Plan(
+            intent="meeting_prep",
+            planner="rules",
+            person_names=tuple(names),
+            topic=topic,
+            time_expression=expression,
+            since=since,
+            meeting_id=meeting_id,
+        )
+    if _CROSS_MEETING.search(question):
+        return Plan(
+            intent="cross_meeting",
+            planner="rules",
+            person_names=tuple(names),
+            topic=topic,
+            time_expression=expression,
+            since=since,
+            meeting_id=meeting_id,
+        )
+    return None
+
+
 def candidate_names(question: str) -> list[str]:
     """Runs of capitalized words that are not common sentence words, as written (at most 3)."""
     names: list[str] = []
@@ -347,8 +424,13 @@ async def plan_question(
     client: AIClient | None,
     allow_ai: bool,
     user_id: UUID | None,
+    meeting_id: UUID | None = None,
 ) -> tuple[Plan, tuple[UUID, ...]]:
-    """(plan, AI call IDs). Rules first; AI-05 only when they cannot decide (§8.2)."""
+    """(plan, AI call IDs). Rules first; AI-05 only when they cannot decide (§8.2). Meeting
+    intents (Phase 4) are decided by rules before the Phase 2 rules."""
+    meeting_plan = plan_meeting(question, meeting_id=meeting_id)
+    if meeting_plan is not None:
+        return meeting_plan, ()
     ruled = plan_by_rules(question, conversation_id=conversation_id)
     if ruled is not None:
         return ruled, ()
@@ -370,10 +452,7 @@ async def plan_question(
     if time_expression == "since_date" and out.since_date:
         time_expression, since = out.since_date, True
     elif time_expression == "since_last_meeting":
-        time_expression, since = (
-            "recently",
-            True,
-        )  # meeting anchors arrive with the meeting pipeline (Phase 4)
+        since = True  # resolved against meetings at assembly (Phase 4, CONTEXT_ARCHITECTURE.md §9.11)
     plan = Plan(
         intent=out.intent,
         planner="ai",

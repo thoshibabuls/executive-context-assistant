@@ -2608,6 +2608,88 @@
     "summary": "Get Meeting"
    }
   },
+  "/api/v1/meetings/{meeting_id}/prep": {
+   "get": {
+    "description": "The prep view (BACKEND_DESIGN.md \u00a716.9): deterministic sections, no model call, no write.",
+    "operationId": "get_meeting_prep_api_v1_meetings__meeting_id__prep_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "meeting_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Meeting Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Meeting Prep Api V1 Meetings  Meeting Id  Prep Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Meeting Prep"
+   }
+  },
+  "/api/v1/meetings/{meeting_id}/prep/asks": {
+   "post": {
+    "description": "The web app calls this when the prep view opens with non-empty sections: the sections are\nstored for the current key and AI-11 is requested once per version (202), or the stored asks\nare returned (200). 409 ``nothing_to_ask`` when the sections are empty (no AI-11 call).",
+    "operationId": "request_meeting_asks_api_v1_meetings__meeting_id__prep_asks_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "meeting_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Meeting Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Request Meeting Asks"
+   }
+  },
   "/api/v1/meetings/{meeting_id}/speakers": {
    "put": {
     "description": "The user's speaker mapping (authority 5): user mappings survive re-extraction; items whose\nstatements came from a remapped label are re-pointed as ``actor = user`` events.",

@@ -18,6 +18,8 @@ from pydantic import BaseModel
 from eca.intelligence.extraction import prompt_text
 from eca.intelligence.output_schemas.answer_lookup import SCHEMA_VERSION as ANSWER_SCHEMA
 from eca.intelligence.output_schemas.answer_lookup import Answer
+from eca.intelligence.output_schemas.meeting_asks import SCHEMA_VERSION as ASKS_SCHEMA
+from eca.intelligence.output_schemas.meeting_asks import MeetingAsks
 from eca.intelligence.output_schemas.plan_query import SCHEMA_VERSION as PLAN_SCHEMA
 from eca.intelligence.output_schemas.plan_query import PlanQuery
 from eca.intelligence.output_schemas.reply_guidance import SCHEMA_VERSION as REPLY_SCHEMA
@@ -152,5 +154,24 @@ async def run_reply_guidance(
         schema_version=REPLY_SCHEMA,
         output_model=ReplyGuidance,
         content=f"PACKET:\n{packet_text}",
+        user_id=user_id,
+    )
+
+
+MEETING_ASKS_PROMPT_VERSION = "meeting_asks/v1"
+
+
+async def run_meeting_asks(
+    client: AIClient, packet_text: str, *, user_id: UUID | None
+) -> InteractiveCall[MeetingAsks]:
+    """AI-11 (T2) over the rendered prep sections (AI_PIPELINE.md §5.10). Interactive policy:
+    primary, one retry, one fallback; the caller keeps the deterministic sections on failure."""
+    return await _interactive(
+        client,
+        role="meeting_asks",
+        prompt_version=MEETING_ASKS_PROMPT_VERSION,
+        schema_version=ASKS_SCHEMA,
+        output_model=MeetingAsks,
+        content=f"PREP SECTIONS:\n{packet_text}",
         user_id=user_id,
     )

@@ -76,12 +76,19 @@ export default function ChatPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [meeting, setMeeting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const page = unwrap<Page<ChatSession>>(await api.GET("/api/v1/chat/sessions", { params: { query: { limit: 1 } } }));
-      const current =
-        page.items[0] ?? unwrap<ChatSession>(await api.POST("/api/v1/chat/sessions", { body: { scope: { kind: "global" } } }));
+      // A meeting-scoped session (Phase 4) when opened from a meeting page: /chat?meeting=<id>.
+      const meetingId = new URLSearchParams(window.location.search).get("meeting");
+      setMeeting(meetingId);
+      const page = unwrap<Page<ChatSession>>(await api.GET("/api/v1/chat/sessions", { params: { query: { limit: 20 } } }));
+      const existing = page.items.find((x) =>
+        meetingId ? x.scope.kind === "meeting" && x.scope.meeting_id === meetingId : x.scope.kind !== "meeting",
+      );
+      const scope = meetingId ? { kind: "meeting", meeting_id: meetingId } : { kind: "global" };
+      const current = existing ?? unwrap<ChatSession>(await api.POST("/api/v1/chat/sessions", { body: { scope } }));
       const full = unwrap<ChatSession>(
         await api.GET("/api/v1/chat/sessions/{session_id}", { params: { path: { session_id: current.id } } }),
       );
@@ -141,7 +148,13 @@ export default function ChatPage() {
 
   return (
     <>
-      <h1>Ask about your work</h1>
+      <h1>{meeting ? "Ask about this meeting" : "Ask about your work"}</h1>
+      {meeting && (
+        <p className="meta">
+          Answers use this meeting, its transcript and up to two related earlier meetings.{" "}
+          <a href={`/meetings/${meeting}`}>Back to the meeting</a>
+        </p>
+      )}
       <p className="meta">
         Answers cite your email, calendar and tasks. AI inferences and suggestions are labelled; when the
         evidence is not there, the assistant says so.
@@ -166,7 +179,7 @@ export default function ChatPage() {
           onKeyDown={(e) => {
             if (e.key === "Enter") void send();
           }}
-          placeholder="What am I waiting for?"
+          placeholder={meeting ? "What were the action items?" : "What am I waiting for?"}
           aria-label="Question"
           maxLength={2000}
           style={{ flex: 1 }}

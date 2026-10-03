@@ -15,6 +15,7 @@ RECORDING_PREPARED = "RecordingPrepared"
 TRANSCRIPT_STORED = "TranscriptStored"
 SPEAKER_MAPPING_CHANGED = "SpeakerMappingChanged"
 MEETING_PROCESSED = "MeetingProcessed"
+MEETING_ASKS_REQUESTED = "MeetingAsksRequested"
 
 
 class MeetingChanged(BaseModel):
@@ -74,6 +75,14 @@ class MeetingProcessed(BaseModel):
     recording_id: UUID
 
 
+class MeetingAsksRequested(BaseModel):
+    """The user opened the prep view with non-empty sections: AI-11 runs once for this version."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    meeting_id: UUID
+    version: int
+
+
 register_event(MEETING_CHANGED, MeetingChanged)
 register_event(RECORDING_UPLOADED, RecordingUploaded)
 register_event(RECORDING_STAGE_DUE, RecordingStageDue)
@@ -81,3 +90,4 @@ register_event(RECORDING_PREPARED, RecordingPrepared)
 register_event(TRANSCRIPT_STORED, TranscriptStored)
 register_event(SPEAKER_MAPPING_CHANGED, SpeakerMappingChanged)
 register_event(MEETING_PROCESSED, MeetingProcessed)
+register_event(MEETING_ASKS_REQUESTED, MeetingAsksRequested)

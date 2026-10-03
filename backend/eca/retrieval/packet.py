@@ -43,6 +43,9 @@ BUDGETS: dict[str, Budget] = {
     "S11": Budget(5000, 10000),
     "S12": Budget(4000, 8000),
     "RG": Budget(4000, 8000),  # reply guidance, AI-08 (Phase 3, §9.6)
+    "S4": Budget(2000, 4000),  # meeting preparation (Phase 4)
+    "S5": Budget(7000, 16000),  # cross-meeting and meeting synthesis (Phase 4)
+    "MQ": Budget(3000, 6000),  # meeting Q&A lookups (Phase 4, §9.11)
 }
 LIST_LIMIT = 50  # deterministic scenarios list at most this many items
 

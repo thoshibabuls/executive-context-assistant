@@ -245,6 +245,7 @@ async def run_turn(
             client=client,
             allow_ai=allow_ai,
             user_id=start.user_id,
+            meeting_id=start.state.scope.meeting_id if start.state.scope.kind == "meeting" else None,
         )
         yield ChatEvent("plan", {"scenario": plan.scenario, "tier": plan.tier, "planner": plan.planner})
         vector, model = None, None
