@@ -1,6 +1,6 @@
 # Implementation Plan — Executive Context Assistant
 
-**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete). Phase 1: code written, untested (§0.5). Phase 2: code complete, tests deferred (§0.6) — not complete until its tests and exit criteria pass. Phase 3: in progress — coding only; tests deferred (§0.7)
+**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete). Phase 1: code written, untested (§0.5). Phase 2: code complete, tests deferred (§0.6) — not complete until its tests and exit criteria pass. Phase 3: code complete, tests deferred (§0.7) — not complete until its tests and exit criteria pass
 **Date:** 2026-10-02
 **Authority:** Execution order, slices, deliverables and exit criteria. Architecture is defined in `TECHNICAL_DESIGN.md` and the documents in its §5.1; this plan must not introduce behaviour or architecture that those documents do not describe (`CLAUDE.md`: "If implementation requires changing product behavior, stop and update the appropriate document first").
 
@@ -8,7 +8,7 @@
 
 ## 0. Implementation status
 
-Last updated 2026-10-02 (Phase 1 slices 1.1–1.9 code written and untested, §0.5; slice 0.3 locally verified; slices 0.4 and 0.5 implemented, local results in §0.4; CI run 2: lint and test pass, overall red because of the `secrets` job).
+Last updated 2026-10-03 (Phase 3 code complete, tests deferred, §0.7; Phase 1 slices 1.1–1.9 code written and untested, §0.5; slice 0.3 locally verified; slices 0.4 and 0.5 implemented, local results in §0.4; CI run 2: lint and test pass, overall red because of the `secrets` job).
 
 | Slice | Code | Verification |
 |---|---|---|
@@ -87,7 +87,7 @@ Existing test files were edited only to move the migration head constants and pe
 
 **Phase 2 decisions recorded in the authoritative documents before coding:** module dependencies and the import-linter contracts (`BACKEND_DESIGN.md` §5.2), RLS and roles of every new table (§7.6), Phase 2 schema and migrations (§17.5), jobs (§15), API details (§16.7); chunking, search, ranking, coverage, scope and packet parameters (`CONTEXT_ARCHITECTURE.md` §9.10); thread continuation and time-sweep parameters (§12.7); session context (§13); AI-04/05/06/07 prompts, schemas and grounding details (`AI_PIPELINE.md` §5.8, §11); Phase 2 budget guardrails (`AI_COST_MODEL.md` §7.1).
 
-### 0.7 Phase 3 status — in progress, coding only; tests deferred
+### 0.7 Phase 3 status — code complete, tests deferred
 
 At the owner's instruction ("Phase 3 — coding only; testing is deferred to a later task"), slices 3.1–3.5 are written in the order 3.5a (budget guardrails) → 3.4 → 3.1 → 3.2 → 3.3 → 3.5b (priority fitting) without writing or running any test. Static checks (ruff, ruff format, mypy strict, lint-imports) run through the pre-commit hooks on every commit. No live Gemini call is made and experiment X3 is not run. Phase 3 is **not complete** until the deferred tests below and the Phase 3 exit criteria (§5) pass. It builds on the untested Phase 1 and Phase 2 code (§0.5, §0.6) and inherits that risk.
 
@@ -105,6 +105,31 @@ At the owner's instruction ("Phase 3 — coding only; testing is deferred to a l
 | Phase 3 exit | PRD §57 items 4, 10, 11, 20, 22 demonstrable; E5 and E9 targets met |
 
 Also deferred: unit tests of the new pure functions (reminder rules, keys, slots, quiet hours, caps and learning bounds; relationship-profile formula; briefing sections, counts and headline; gist timeline; reply-guidance draft check; priority pair selection and the bounded fit; budget policy), integration tests of migrations 0018–0023 (up/down/up, privilege matrix, RLS fail-closed on every new table, RT-15 extension), API tests of the new routes (409/422, `Idempotency-Key` replay, rate limits, 404 on other users' IDs, 429 on budget), Web Push against a stub push service, and the deletion and retention paths that now include the attention tables (RT-10, RT-11 extensions).
+
+**Code status per slice** (commits on `main`, in build order; no test written or run; static checks pass on every commit through the pre-commit hooks):
+
+| Slice | Code | Migrations |
+|---|---|---|
+| 3.5a Budget guardrails | `config/budgets.yaml` (caps, global budget, alert fraction, VIP threshold, AI-02 daily cap, per-role stop level); `BudgetGuard` inside `AIClient` (every `generate`/`embed`, 60 s spend cache, global budget in the worker only); `BudgetExceeded` → 429 + `Retry-After`; degradation routes (AI-01 deferred without counting an attempt, VIP/outbound exempt; AI-02 keeps T1; AI-04 FTS-only; AI-05/06/07 through the interactive path); budget-cap audit rows from `cost_rollup` | — |
+| 3.4 People | Relationship profiles (deterministic, `attention.profiles`, written through `people.set_relationship_profile`); `persons.user_fields`; `PersonChanged` with priority and profile recompute; person corrections as user events + `feedback_events`; `GET /people/{id}` from the S2 retriever with a fixed anchor; People list and detail pages | 0018 `persons` columns |
+| 3.1 Reminders | Pure rules (`attention.reminder_rules`), evaluation and delivery (`attention.reminders`), suppression, 5/day proactive cap, quiet hours, bounded dismissal and snooze learning, conditional transitions, notification center, payload-less Web Push (`ReminderDue`, VAPID, endpoint allowlist), `eca ops vapid-keys`, routes, Today section, reminders page and service worker | 0019 `reminders`, `notifications`; 0020 `push_subscriptions` |
+| 3.2 Summaries and briefing | Gist timeline; AI-03 (`thread_summary/v1`, debounced sweep, natural-key job in `retrieval`, provenance on `conversations.summary_*`, `POST /conversations/{id}/summary`); deterministic daily briefing (`attention.briefing`, scheduling, banner, `GET /briefings/{date}`, page); `eca ops cost` | 0021 `conversations.summary_*`; 0022 `briefings` |
+| 3.3 Reply guidance | AI-08 (`reply_guidance/v1`), RG packet (S1 + S2 retrievers, summary or gists, last 3 messages), grounding checks per section, copy-only draft with warnings, degraded route, SSE route with `Idempotency-Key` and 10/min; guidance panel on Today's threads | — |
+| 3.5b Priority fitting | Preference pairs from overrides, bounded per-user multipliers (nightly `priority_fit`), work-item priority override (`PATCH /work-items/{id}`), `eca ops priority-fit`; item-card priority buttons | 0023 `priority_pairs`, `user_priority_weights` |
+
+Existing test files were edited only to move the migration head constants and per-revision table sets to `0023`; they were not run. `tests/integration/test_privileges.py` remains stale (§0.6).
+
+**Known gaps left in the code (to resolve with the deferred tests or later slices):**
+- Phase 3 builds on untested Phase 1 and Phase 2 code; CI's `test` job was already red before Phase 3 (§0.6).
+- The reply-speed term of `importance_inferred` is not computed (`CONTEXT_ARCHITECTURE.md` §5.3); the profile is recomputed for every relevant message's participants, which adds queries per message.
+- Reminders: the per-person follow-up override is not built; `meeting_prep` counts open items only (unresolved questions arrive with meeting extraction, Phase 4); the daily cap ranks within each 5-minute sweep, not across the day; time-driven rules are re-evaluated hourly.
+- Budgets: spend comes from 15-minute roll-ups plus a 60-second cache, so a few calls can pass after a cap; the global budget is enforced only by the worker and only for background roles.
+- Web Push: one duplicate push is possible after a crash between the push service's acceptance and the `sent` commit (`BACKEND_DESIGN.md` §10.1); a signed-out or offline browser shows a generic notification text.
+- AI-03 summaries are not indexed as chunks (a chunk needs one source item); the web app has no conversation page, so the summary request and the gist timeline are API-only, and reply guidance is reachable from Today's threads only.
+- Person user events are recorded but the change feed shows work-item events only.
+- Priority pairs come from explicit overrides only (no implicit signals such as order of completion).
+- The reply-guidance draft check is a token heuristic (numbers, dates, capitalized names); "no invented commitments" still needs the human review sample.
+- The 120/min mutation rate limit of §16.6 is not enforced (pre-existing).
 
 **Experiments deferred:** X3 (AI-03 vs gist timelines) is not run in this task; the code implements the default routing of `AI_PIPELINE.md` §5.9 (AI-03 only for threads with ≥ 8 relevant messages or on request).
 
@@ -502,7 +527,7 @@ Provider deletion flow (§9.3), source purge on disconnect, account deletion job
 
 **Phase 3 exit:** PRD §57 items 4, 10, 11, 20, 22; E5 and E9 targets.
 
-**Status:** in progress — coding only; tests deferred (§0.7). Build order 3.5a (budget guardrails) → 3.4 → 3.1 → 3.2 → 3.3 → 3.5b (priority fitting), because 3.2 and 3.3 add AI calls that must run behind the guardrails.
+**Status:** code complete, tests deferred (§0.7); not complete until its tests and exit criteria pass. Build order 3.5a (budget guardrails) → 3.4 → 3.1 → 3.2 → 3.3 → 3.5b (priority fitting), because 3.2 and 3.3 add AI calls that must run behind the guardrails.
 
 ---
 
