@@ -75,6 +75,18 @@ class Settings(BaseSettings):
     web_push_vapid_private_key: SecretStr | None = None
     web_push_vapid_subject: str | None = None  # mailto: or https: contact
 
+    # Object storage (Phase 4, TECHNICAL_DESIGN.md §10.6): ``local`` only in the MVP (refused in
+    # production); the hosted adapter comes with the hosting decision (Q1). The signing key makes
+    # the upload URLs; unset → a random per-process key (pending upload URLs die with the process).
+    api_storage_backend: Literal["local"] = "local"
+    api_storage_local_dir: str | None = None  # default: <repo>/.local/objects (git-ignored)
+    storage_signing_key: SecretStr | None = None
+
+    # Media processing (Phase 4, TECHNICAL_DESIGN.md §16.1): worker only.
+    ffmpeg_path: str = "ffmpeg"
+    ffprobe_path: str = "ffprobe"
+    api_media_tmp_dir: str | None = None  # default: the system temporary directory
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.api_cors_origins.split(",") if o.strip()]

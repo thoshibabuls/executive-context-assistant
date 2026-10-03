@@ -209,6 +209,13 @@ type = "forbidden"
 source_modules = ["eca.projects"]
 forbidden_modules = ["eca.retrieval", "eca.chat"]
 
+# ---------------------------------------------------------------- Phase 4 dependency rules (§5.2)
+[[tool.importlinter.contracts]]
+name = "meetings never imports work, attention, communication or projects (work -> meetings is the Phase 4 edge)"
+type = "forbidden"
+source_modules = ["eca.meetings"]
+forbidden_modules = ["eca.work", "eca.attention", "eca.communication", "eca.projects"]
+
 # ---------------------------------------------------------------- Phase 3 dependency rules (§5.2)
 [[tool.importlinter.contracts]]
 name = "attention and people never import intelligence (priority, reminders, briefings and profiles are deterministic)"

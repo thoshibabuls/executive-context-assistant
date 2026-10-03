@@ -240,6 +240,93 @@
     "title": "HTTPValidationError",
     "type": "object"
    },
+   "InitUpload": {
+    "additionalProperties": false,
+    "properties": {
+     "bytes": {
+      "exclusiveMinimum": 0.0,
+      "title": "Bytes",
+      "type": "integer"
+     },
+     "meeting_id": {
+      "anyOf": [
+       {
+        "format": "uuid",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Meeting Id"
+     },
+     "mime": {
+      "maxLength": 120,
+      "minLength": 3,
+      "title": "Mime",
+      "type": "string"
+     },
+     "occurred_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Occurred At"
+     },
+     "sha256": {
+      "maxLength": 64,
+      "minLength": 64,
+      "title": "Sha256",
+      "type": "string"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Title"
+     }
+    },
+    "required": [
+     "mime",
+     "bytes",
+     "sha256"
+    ],
+    "title": "InitUpload",
+    "type": "object"
+   },
+   "LinkMeeting": {
+    "additionalProperties": false,
+    "properties": {
+     "meeting_id": {
+      "anyOf": [
+       {
+        "format": "uuid",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Meeting Id"
+     }
+    },
+    "required": [
+     "meeting_id"
+    ],
+    "title": "LinkMeeting",
+    "type": "object"
+   },
    "MergeBody": {
     "additionalProperties": false,
     "properties": {
@@ -3393,6 +3480,343 @@
      }
     },
     "summary": "Delete Push Subscription"
+   }
+  },
+  "/api/v1/recordings": {
+   "get": {
+    "operationId": "list_recordings_api_v1_recordings_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Cursor"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response List Recordings Api V1 Recordings Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "List Recordings"
+   },
+   "post": {
+    "description": "Upload init: a pre-signed URL (201), or the existing recording for known media (200).",
+    "operationId": "init_recording_api_v1_recordings_post",
+    "parameters": [
+     {
+      "in": "header",
+      "name": "Idempotency-Key",
+      "required": true,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Idempotency-Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/InitUpload"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Init Recording"
+   }
+  },
+  "/api/v1/recordings/meeting-suggestions": {
+   "get": {
+    "description": "The upload dialog's suggestions: overlapping or recent calendar meetings (\u00a716.9).",
+    "operationId": "recording_meeting_suggestions_api_v1_recordings_meeting_suggestions_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "occurred_at",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "format": "date-time",
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Occurred At"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Recording Meeting Suggestions Api V1 Recordings Meeting Suggestions Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Recording Meeting Suggestions"
+   }
+  },
+  "/api/v1/recordings/{recording_id}": {
+   "get": {
+    "operationId": "get_recording_api_v1_recordings__recording_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "recording_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Recording Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Recording Api V1 Recordings  Recording Id  Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Recording"
+   }
+  },
+  "/api/v1/recordings/{recording_id}/complete": {
+   "post": {
+    "operationId": "complete_recording_api_v1_recordings__recording_id__complete_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "recording_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Recording Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Complete Recording"
+   }
+  },
+  "/api/v1/recordings/{recording_id}/meeting": {
+   "put": {
+    "operationId": "link_recording_api_v1_recordings__recording_id__meeting_put",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "recording_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Recording Id",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LinkMeeting"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Link Recording Api V1 Recordings  Recording Id  Meeting Put",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Link Recording"
+   }
+  },
+  "/api/v1/recordings/{recording_id}/retry": {
+   "post": {
+    "operationId": "retry_recording_api_v1_recordings__recording_id__retry_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "recording_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Recording Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Retry Recording"
    }
   },
   "/api/v1/reminders": {

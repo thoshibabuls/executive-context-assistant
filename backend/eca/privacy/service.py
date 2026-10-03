@@ -4,11 +4,11 @@ Deletion jobs are ordered (children before parents, no cascades, §13.2), idempo
 resumable: every step can run again after a crash; ``deletion_jobs.progress`` records the steps
 done for operators. Each step is its own short worker transaction for the user.
 
-Account deletion order (§13.3): revoke tokens → chat → retrieval (chunks, traces) → work (mentions first: they
-point at evidence) → communication → meetings → intelligence → people → ingestion → connections
-→ final step (idempotency keys, feedback, sessions, the user's event consumptions and outbox
-rows, audit rows replaced by one content-free record, the job row, the user row) in one
-transaction.
+Account deletion order (§13.3): uploaded objects (Phase 4) → revoke tokens → chat → retrieval
+(chunks, traces) → work (mentions first: they point at evidence) → communication → meetings →
+intelligence → people → ingestion → connections → final step (idempotency keys, feedback,
+sessions, the user's event consumptions and outbox rows, audit rows replaced by one content-free
+record, the job row, the user row) in one transaction.
 
 Source purge (§13.3), per batch of the connection's source items: chunks and continuation links
 → mentions → work (evidence quotes redacted, AI-only items deleted, user-touched items kept with
@@ -51,6 +51,7 @@ from eca.platform.feedback import purge_user_feedback
 from eca.platform.idempotency import purge_expired_keys, purge_user_keys
 from eca.platform.ids import uuid7
 from eca.platform.outbox import publish, purge_dispatched, purge_user_events
+from eca.platform.storage import ObjectStorage
 from eca.platform.uow import UnitOfWork, UnitOfWorkFactory
 from eca.privacy.events import SOURCE_PURGE_REQUESTED, SourcePurgeRequested
 from eca.privacy.models import deletion_jobs_table
@@ -146,6 +147,7 @@ async def run_account_deletion(
     crypto: connections.TokenCrypto | None,
     http: httpx.AsyncClient | None,
     now: datetime.datetime,
+    storage: ObjectStorage | None = None,
 ) -> bool:
     """Run (or resume) the account deletion job. False when there is nothing left to do."""
     async with factory(user_id=user_id) as uow:
@@ -154,6 +156,12 @@ async def run_account_deletion(
             return False
         done = set(job["progress"].get("done", []))
         await _set_progress(uow, job_id, job["progress"], now=now)
+    if "objects" not in done:
+        # Uploaded media live in object storage, outside the database: they go first (§13.3).
+        async with factory(user_id=user_id) as uow:
+            if storage is not None:
+                await meetings.delete_user_objects(uow, storage)
+            await _step_done(uow, job_id, "objects", now=now)
     if "tokens" not in done:
         # Revocation is a network call per connection: its own transaction, before any data goes.
         async with factory(user_id=user_id) as uow:
@@ -167,7 +175,7 @@ async def run_account_deletion(
             await _step_done(uow, job_id, name, now=now)
         log.info("account_deletion_step", step=name)
     async with factory(user_id=user_id) as uow:
-        await _final_step(uow, job_id, len(_ACCOUNT_STEPS) + 2)
+        await _final_step(uow, job_id, len(_ACCOUNT_STEPS) + 3)
     log.info("account_deleted")
     return True
 

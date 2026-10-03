@@ -1,7 +1,14 @@
-"""Meetings handlers: calendar source items → meetings."""
+"""Meetings handlers: calendar source items → meetings; Phase 4: the media sweep (upload expiry,
+retry and budget re-publish)."""
 
 from __future__ import annotations
 
+import datetime
+from functools import lru_cache
+
+import structlog
+
+from eca.identity import list_active_user_ids
 from eca.ingestion import (
     SOURCE_ITEM_DELETED,
     SOURCE_ITEM_STAGE_DUE,
@@ -10,8 +17,15 @@ from eca.ingestion import (
     SourceItemStageDue,
     SourceItemStored,
 )
+from eca.meetings.recordings import expire_pending_uploads, publish_due_stages
 from eca.meetings.service import cancel_from_deleted_source, upsert_from_source
+from eca.platform.config import get_settings
 from eca.platform.events import HandlerContext, handles
+from eca.platform.jobs import PeriodicTaskSpec
+from eca.platform.storage import ObjectStorage, build_storage
+from eca.platform.uow import UnitOfWorkFactory
+
+log = structlog.get_logger("eca.meetings")
 
 
 @handles(SOURCE_ITEM_STORED, name="meetings.upsert", queue="ingest")
@@ -36,3 +50,39 @@ async def on_source_deleted(ctx: HandlerContext) -> None:
     assert isinstance(payload, SourceItemDeleted)
     if payload.kind == "calendar_event":
         await cancel_from_deleted_source(ctx.tx, payload.source_item_id)
+
+
+# ---------------------------------------------------------------- media sweep (Phase 4)
+
+MEDIA_SWEEP_TASK = "eca.meetings.media_sweep"
+
+
+@lru_cache(maxsize=1)
+def _storage() -> ObjectStorage:
+    return build_storage(get_settings())
+
+
+async def _media_sweep(uow_factory: UnitOfWorkFactory, now: datetime.datetime) -> None:
+    """Every 5 minutes, one transaction per user (BACKEND_DESIGN.md §15 Phase 4 jobs)."""
+    storage = _storage()
+    async with uow_factory(user_id=None) as uow:
+        users = await list_active_user_ids(uow)
+    expired = due = 0
+    for user_id in users:
+        async with uow_factory(user_id=user_id) as uow:
+            expired += await expire_pending_uploads(uow, storage, now=now)
+            due += await publish_due_stages(uow, now=now)
+    if expired or due:
+        log.info("media_sweep", expired_uploads=expired, stages_due=due)
+
+
+def periodic_tasks() -> list[PeriodicTaskSpec]:
+    return [
+        PeriodicTaskSpec(
+            name=MEDIA_SWEEP_TASK,
+            periodic_id="media_sweep",
+            cron="*/5 * * * *",
+            queue="schedule",
+            run=_media_sweep,
+        )
+    ]

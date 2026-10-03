@@ -15,6 +15,8 @@ from uuid import UUID
 from eca.platform.errors import RateLimited
 
 LIMITS_PER_MINUTE = {"chat": 20, "reply_guidance": 10, "summary": 10}
+# Phase 4: upload inits per hour (BACKEND_DESIGN.md §16.6).
+LIMITS_PER_HOUR = {"upload": 10}
 
 
 @dataclass
@@ -25,22 +27,29 @@ class _Bucket:
 
 class RateLimiter:
     def __init__(
-        self, limits: dict[str, int] | None = None, clock: Callable[[], float] = time.monotonic
+        self,
+        limits: dict[str, int] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        hourly: dict[str, int] | None = None,
     ) -> None:
-        self._limits = dict(limits or LIMITS_PER_MINUTE)
+        # (capacity, refill per second) per limit name.
+        self._limits = {name: (float(n), n / 60.0) for name, n in (limits or LIMITS_PER_MINUTE).items()}
+        self._limits |= {
+            name: (float(n), n / 3600.0)
+            for name, n in (LIMITS_PER_HOUR if hourly is None else hourly).items()
+        }
         self._clock = clock
         self._buckets: dict[tuple[UUID, str], _Bucket] = {}
 
     def check(self, user_id: UUID, name: str) -> None:
         """Take one token or raise ``RateLimited`` with the seconds until the next token."""
-        per_minute = self._limits[name]
-        rate = per_minute / 60.0
+        capacity, rate = self._limits[name]
         now = self._clock()
         bucket = self._buckets.get((user_id, name))
         if bucket is None:
-            bucket = _Bucket(float(per_minute), now)
+            bucket = _Bucket(capacity, now)
             self._buckets[(user_id, name)] = bucket
-        bucket.tokens = min(float(per_minute), bucket.tokens + (now - bucket.updated) * rate)
+        bucket.tokens = min(capacity, bucket.tokens + (now - bucket.updated) * rate)
         bucket.updated = now
         if bucket.tokens < 1.0:
             raise RateLimited(

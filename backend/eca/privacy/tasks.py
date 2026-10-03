@@ -11,6 +11,7 @@ from eca.identity import USER_DELETION_REQUESTED, UserDeletionRequested
 from eca.platform.clock import Clock
 from eca.platform.events import HandlerContext, Resources, handles
 from eca.platform.jobs import PeriodicTaskSpec
+from eca.platform.storage import ObjectStorage
 from eca.platform.uow import UnitOfWorkFactory
 from eca.privacy.events import SOURCE_PURGE_REQUESTED, SourcePurgeRequested
 from eca.privacy.service import run_account_deletion, run_retention, run_source_purge
@@ -37,6 +38,7 @@ async def on_user_deletion_requested(ctx: HandlerContext) -> None:
     assert isinstance(payload, UserDeletionRequested)
     crypto = _optional(ctx.resources, TokenCrypto)
     http = _optional(ctx.resources, httpx.AsyncClient)
+    storage = _optional(ctx.resources, ObjectStorage)
     await run_account_deletion(
         ctx.factory,
         user_id=payload.user_id,
@@ -44,6 +46,7 @@ async def on_user_deletion_requested(ctx: HandlerContext) -> None:
         crypto=crypto if isinstance(crypto, TokenCrypto) else None,
         http=http if isinstance(http, httpx.AsyncClient) else None,
         now=ctx.resources.get(Clock).now(),
+        storage=storage if isinstance(storage, ObjectStorage) else None,
     )
 
 

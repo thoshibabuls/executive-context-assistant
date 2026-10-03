@@ -237,3 +237,51 @@ export type Briefing = {
     };
   };
 };
+
+// Meetings and uploads (Phase 4, BACKEND_DESIGN.md §16.9). Recordings are your uploads (source
+// data); their status shows the processing stage.
+export type RecordingStatus =
+  | "pending_upload"
+  | "uploaded"
+  | "preparing"
+  | "transcribing"
+  | "transcribed"
+  | "extracting"
+  | "ready"
+  | "failed"
+  | "rejected";
+
+export type Recording = {
+  id: string;
+  kind: "media" | "transcript_file";
+  mime: string;
+  bytes: number;
+  title: string | null;
+  occurred_at: string | null;
+  meeting_id: string | null;
+  status: RecordingStatus;
+  failed_stage: "prepare" | "transcribe" | "extract" | null;
+  error_code: string | null;
+  stage_attempts: number;
+  next_attempt_at: string | null;
+  duration_s: number | null;
+  transcription_model: string | null;
+  processed_at: string | null;
+  raw_purged_at: string | null;
+  version: number;
+  created_at: string | null;
+};
+
+export type UploadInitResponse = {
+  recording: Recording;
+  upload: { url: string; method: string; headers: Record<string, string>; expires_at: string } | null;
+  duplicate: boolean;
+};
+
+export type MeetingSuggestion = {
+  id: string;
+  title: string | null;
+  starts_at: string;
+  ends_at: string;
+  reason: "overlaps" | "recent";
+};

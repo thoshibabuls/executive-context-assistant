@@ -19,7 +19,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from eca.ingestion import get_source_item, set_stage
 from eca.meetings.events import MEETING_CHANGED, MeetingChanged
-from eca.meetings.models import meeting_participants_table, meetings_table
+from eca.meetings.models import meeting_participants_table, meetings_table, recordings_table
 from eca.people import get_self_person, resolve_address
 from eca.platform.events import NewEvent
 from eca.platform.ids import uuid7
@@ -171,13 +171,19 @@ async def cancel_from_deleted_source(uow: UnitOfWork, source_item_id: UUID) -> N
 
 
 async def purge_user(uow: UnitOfWork) -> None:
+    """Account deletion (§13.3): recordings first (they reference meetings and source items); the
+    objects were deleted by the job's ``objects`` step before any row goes."""
+    await uow.session.execute(delete(recordings_table))
     await uow.session.execute(delete(meeting_participants_table))
     await uow.session.execute(delete(meetings_table))
 
 
 async def purge_sources(uow: UnitOfWork, source_item_ids: list[UUID]) -> None:
-    m, mp = meetings_table, meeting_participants_table
+    """Source purge of calendar events: an uploaded recording linked to a purged meeting is kept
+    (it belongs to no connection) and becomes unlinked."""
+    m, mp, r = meetings_table, meeting_participants_table, recordings_table
     ids = select(m.c.id).where(m.c.source_item_id.in_(source_item_ids))
+    await uow.session.execute(update(r).where(r.c.meeting_id.in_(ids)).values(meeting_id=None))
     await uow.session.execute(delete(mp).where(mp.c.meeting_id.in_(ids)))
     await uow.session.execute(delete(m).where(m.c.source_item_id.in_(source_item_ids)))
 

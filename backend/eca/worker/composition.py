@@ -6,6 +6,7 @@ explicitly (never by scanning). The production entry point has no hook for loadi
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable, Sequence
 
 import httpx
@@ -24,6 +25,7 @@ from eca.platform.clock import Clock, SystemClock
 from eca.platform.config import Settings
 from eca.platform.events import EventRegistry, Resources, default_registry
 from eca.platform.jobs import PeriodicTaskSpec
+from eca.platform.storage import build_storage
 from eca.platform.uow import UnitOfWorkFactory
 from eca.worker.runner import ReconcileHook
 
@@ -45,10 +47,10 @@ def production_registry() -> EventRegistry:
 
 
 def production_resources(settings: Settings) -> Callable[[UnitOfWorkFactory], Resources]:
-    """AI client from settings (``API_AI_MODE``: live, replay or record), the connectors, and for
-    account deletion the token crypto (when ``TOKEN_KEK`` is set) and an HTTP client for token
-    revocation; the Web Push sender when the VAPID keys are set. The HTTP clients live as long as
-    the worker process."""
+    """AI client from settings (``API_AI_MODE``: live, replay or record), the connectors, object
+    storage (Phase 4), and for account deletion the token crypto (when ``TOKEN_KEK`` is set) and an
+    HTTP client for token revocation; the Web Push sender when the VAPID keys are set. The HTTP
+    clients live as long as the worker process."""
 
     def build(uow_factory: UnitOfWorkFactory) -> Resources:
         ai = eca.intelligence.build_ai_client(settings, uow_factory=uow_factory, global_budget=True)
@@ -58,6 +60,10 @@ def production_resources(settings: Settings) -> Callable[[UnitOfWorkFactory], Re
             ai,
             httpx.AsyncClient(timeout=30.0),
         ]
+        # Object storage for the media pipeline and account deletion (TECHNICAL_DESIGN.md §10.6); no
+        # adapter (production before Q1) → media stages fail and the user retries them later.
+        with contextlib.suppress(ValueError):
+            values.append(build_storage(settings))
         keys = eca.attention.VapidKeys.from_settings(settings)
         if keys is not None:  # Web Push only with VAPID keys from the environment (TECHNICAL_DESIGN.md §15.4)
             values.append(eca.attention.WebPushSender(keys, httpx.AsyncClient(timeout=15.0)))
@@ -90,4 +96,5 @@ def production_periodic_tasks() -> list[PeriodicTaskSpec]:
         *eca.projects.periodic_tasks(),
         *eca.privacy.periodic_tasks(),
         *eca.retrieval.periodic_tasks(),
+        *eca.meetings.periodic_tasks(),
     ]

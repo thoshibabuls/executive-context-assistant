@@ -352,6 +352,68 @@ async def store_events(uow: UnitOfWork, info: ConnectionInfo, batch: SyncBatch[A
     return stored
 
 
+UPLOAD_PROVIDER = "upload"
+
+
+async def register_upload(
+    uow: UnitOfWork,
+    *,
+    recording_id: UUID,
+    kind: str,
+    sha256: bytes,
+    occurred_at: datetime.datetime,
+) -> UUID:
+    """The ``source_items`` row of an uploaded recording or transcript file (BACKEND_DESIGN.md
+    §11.4): provider ``upload``, no connection, external ID = the recording ID, ``content_hash`` =
+    the media SHA-256. Stage ``normalized``: the meeting pipeline tracks its own stages on
+    ``recordings``, so the source-item reconciler never picks it up. Idempotent per recording."""
+    if kind not in ("recording", "transcript_file"):
+        raise ValueError(f"unknown upload kind {kind!r}")
+    t = source_items_table
+    existing = (
+        await uow.session.execute(
+            select(t.c.id).where(
+                t.c.provider == UPLOAD_PROVIDER, t.c.kind == kind, t.c.external_id == str(recording_id)
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return UUID(str(existing))
+    item_id = uuid7()
+    await uow.session.execute(
+        insert(t).values(
+            id=item_id,
+            user_id=uow.user_id,
+            connection_id=None,
+            kind=kind,
+            provider=UPLOAD_PROVIDER,
+            external_id=str(recording_id),
+            content_hash=sha256,
+            categories=[],
+            occurred_at=occurred_at,
+            trashed=False,
+            content=None,
+            raw_metadata={},
+            stage="normalized",
+            stage_attempts=0,
+            stage_updated_at=text("now()"),
+        )
+    )
+    return item_id
+
+
+async def set_upload_occurred_at(
+    uow: UnitOfWork, source_item_id: UUID, occurred_at: datetime.datetime
+) -> None:
+    """The upload's meeting time once it is known (a calendar link or the upload meeting)."""
+    t = source_items_table
+    await uow.session.execute(
+        update(t)
+        .where(t.c.id == source_item_id, t.c.provider == UPLOAD_PROVIDER)
+        .values(occurred_at=occurred_at)
+    )
+
+
 def event_content(ev: Any) -> dict[str, Any]:
     return {
         "external_id": ev.external_id,

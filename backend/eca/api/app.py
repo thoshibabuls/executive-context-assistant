@@ -17,6 +17,7 @@ from eca.api.chat import router as chat_router
 from eca.api.connections import router as connections_router
 from eca.api.context import router as context_router
 from eca.api.health import router as health_router
+from eca.api.meetings import router as meetings_router
 from eca.api.middleware import RequestIdMiddleware
 from eca.api.problems import install_problem_handlers
 from eca.api.projects import router as projects_router
@@ -31,6 +32,7 @@ from eca.platform.db import create_engine, create_session_factory
 from eca.platform.health import migration_head
 from eca.platform.logging import configure_logging
 from eca.platform.runtime import ensure_selector_event_loop_policy
+from eca.platform.storage import ObjectStorage, build_storage
 from eca.platform.uow import UnitOfWorkFactory
 
 ensure_selector_event_loop_policy()
@@ -46,6 +48,17 @@ def _ai_client(settings: Settings, factory: UnitOfWorkFactory | None) -> AIClien
         return build_ai_client(settings, uow_factory=factory)
     except AIError as exc:
         log.warning("ai_client_unavailable", error_type=type(exc).__name__)
+        return None
+
+
+def _storage(settings: Settings) -> ObjectStorage | None:
+    """Object storage for uploads (TECHNICAL_DESIGN.md §10.6). Without a usable adapter (the local
+    one is refused in production until the hosted one exists, Q1) upload routes fail; the rest of
+    the API still starts."""
+    try:
+        return build_storage(settings)
+    except ValueError as exc:
+        log.warning("storage_unavailable", error=str(exc))
         return None
 
 
@@ -80,6 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.cursors = CursorCodec(key)
         app.state.rate_limiter = RateLimiter()
         app.state.ai_client = _ai_client(settings, app.state.uow_factory)
+        app.state.storage = _storage(settings)
         try:
             yield
         finally:
@@ -114,6 +128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(chat_router)
     app.include_router(guidance_router)
     app.include_router(reminders_router)
+    app.include_router(meetings_router)
     return app
 
 
