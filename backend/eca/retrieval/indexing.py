@@ -164,6 +164,8 @@ async def meeting_target(uow: UnitOfWork, meeting_id: UUID) -> IndexTarget | Non
     if not found:
         return None
     m = found[0]
+    if m.origin == "upload":
+        return None  # an upload meeting shares its source item with the transcript windows
     self_p = await people.get_self_person(uow)
     attendees = [p for p in m.attendee_ids if p != self_p.id]
     names = []

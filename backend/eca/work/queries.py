@@ -47,6 +47,8 @@ class EvidenceView:
     relation: str | None
     extraction_id: UUID | None
     occurred_at: datetime.datetime | None
+    start_ms: int | None = None  # transcript evidence: offsets from the recording start
+    end_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -255,6 +257,7 @@ class DecisionView:
     user_fields: tuple[str, ...]
     version: int
     created_at: datetime.datetime | None
+    meeting_id: UUID | None = None  # decisions and open questions from a meeting (Phase 4)
 
 
 def decision_view(row: Any) -> DecisionView:
@@ -280,6 +283,7 @@ def decision_view(row: Any) -> DecisionView:
         user_fields=tuple(row.user_fields or ()),
         version=row.version,
         created_at=row.created_at,
+        meeting_id=getattr(row, "meeting_id", None),
     )
 
 

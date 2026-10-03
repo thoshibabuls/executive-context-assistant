@@ -54,6 +54,7 @@ from eca.platform.uow import UnitOfWorkFactory
 from eca.work.apply import apply_extraction
 from eca.work.candidates import build_candidates
 from eca.work.events import ADJUDICATION_NEEDED, AdjudicationNeeded
+from eca.work.meeting_apply import apply_meeting_extraction
 from eca.work.purge import on_source_deleted
 
 log = structlog.get_logger("eca.work.pipeline")
@@ -194,6 +195,8 @@ async def on_extraction_completed(ctx: HandlerContext) -> None:
     assert isinstance(payload, ExtractionCompleted)
     if payload.pipeline == "email_extract":
         await apply_extraction(ctx.tx, payload.extraction_id, now=_now(ctx))
+    elif payload.pipeline == "meeting_extract":
+        await apply_meeting_extraction(ctx.tx, payload.extraction_id, now=_now(ctx))
 
 
 @handles(SOURCE_ITEM_STAGE_DUE, name=APPLY_DUE_HANDLER, queue="apply")

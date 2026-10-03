@@ -46,7 +46,7 @@ from eca.retrieval.plan import (
     Turn,
 )
 from eca.retrieval.planner import candidate_names, plan_by_rules, plan_question
-from eca.retrieval.purge import purge_user
+from eca.retrieval.purge import detach_meetings, purge_user
 from eca.retrieval.registry import all_retrievers
 from eca.retrieval.reply import newest_inbound_sender, reply_anchor
 from eca.retrieval.retrievers import PersonContextPage, person_context_for
@@ -127,6 +127,7 @@ __all__ = [
     "day_view",
     "day_view_for",
     "delimit",
+    "detach_meetings",
     "email_chunks",
     "embed_question",
     "estimate_tokens",

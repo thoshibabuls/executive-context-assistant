@@ -483,6 +483,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/meetings/{meeting_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Meeting
+         * @description The meeting page and the missed-meeting view (PRD §22, §25): deterministic reads only.
+         */
+        get: operations["get_meeting_api_v1_meetings__meeting_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meetings/{meeting_id}/speakers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Speakers
+         * @description The user's speaker mapping (authority 5): user mappings survive re-extraction; items whose
+         *     statements came from a remapped label are re-pointed as ``actor = user`` events.
+         */
+        put: operations["put_speakers_api_v1_meetings__meeting_id__speakers_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notifications": {
         parameters: {
             query?: never;
@@ -1315,6 +1356,20 @@ export interface components {
             preset?: ("1h" | "3h" | "tomorrow") | null;
             /** Until */
             until?: string | null;
+        };
+        /** SpeakerMappingIn */
+        SpeakerMappingIn: {
+            /** Label */
+            label: string;
+            /** Person Id */
+            person_id: string | null;
+        };
+        /** SpeakersIn */
+        SpeakersIn: {
+            /** Base Version */
+            base_version?: number | null;
+            /** Mappings */
+            mappings: components["schemas"]["SpeakerMappingIn"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -2359,6 +2414,75 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_meeting_api_v1_meetings__meeting_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meeting_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_speakers_api_v1_meetings__meeting_id__speakers_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "If-Match"?: string | null;
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                meeting_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpeakersIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

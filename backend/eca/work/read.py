@@ -208,6 +208,8 @@ async def evidence_for(
             ie.c.relation,
             ev.c.extraction_id,
             ev.c.occurred_at,
+            ev.c.start_ms,
+            ev.c.end_ms,
         )
         .join(ev, ev.c.id == ie.c.evidence_id)
         .where(
@@ -223,7 +225,16 @@ async def evidence_for(
     for r in rows:
         if len(out[r.item_id]) < per_item:
             out[r.item_id].append(
-                EvidenceView(r.id, r.source_item_id, r.quote, r.relation, r.extraction_id, r.occurred_at)
+                EvidenceView(
+                    r.id,
+                    r.source_item_id,
+                    r.quote,
+                    r.relation,
+                    r.extraction_id,
+                    r.occurred_at,
+                    r.start_ms,
+                    r.end_ms,
+                )
             )
     return out
 

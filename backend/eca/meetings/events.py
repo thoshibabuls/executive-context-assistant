@@ -13,6 +13,8 @@ RECORDING_UPLOADED = "RecordingUploaded"
 RECORDING_STAGE_DUE = "RecordingStageDue"
 RECORDING_PREPARED = "RecordingPrepared"
 TRANSCRIPT_STORED = "TranscriptStored"
+SPEAKER_MAPPING_CHANGED = "SpeakerMappingChanged"
+MEETING_PROCESSED = "MeetingProcessed"
 
 
 class MeetingChanged(BaseModel):
@@ -53,8 +55,29 @@ class TranscriptStored(BaseModel):
     transcription_model: str
 
 
+class SpeakerMappingChanged(BaseModel):
+    """Applied speaker mappings of a meeting changed (user confirmation or AI-10 apply): transcript
+    chunks are re-indexed with the new names."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    meeting_id: UUID
+    recording_id: UUID | None
+    labels: list[str]
+    version: int
+
+
+class MeetingProcessed(BaseModel):
+    """AI-10 apply finished for a meeting's recording: prep sections are recomputed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    meeting_id: UUID
+    recording_id: UUID
+
+
 register_event(MEETING_CHANGED, MeetingChanged)
 register_event(RECORDING_UPLOADED, RecordingUploaded)
 register_event(RECORDING_STAGE_DUE, RecordingStageDue)
 register_event(RECORDING_PREPARED, RecordingPrepared)
 register_event(TRANSCRIPT_STORED, TranscriptStored)
+register_event(SPEAKER_MAPPING_CHANGED, SpeakerMappingChanged)
+register_event(MEETING_PROCESSED, MeetingProcessed)

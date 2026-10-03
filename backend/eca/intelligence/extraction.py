@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
@@ -145,7 +146,7 @@ def input_hash(inp: EmailInput) -> bytes:
     return hashlib.sha256(json.dumps([EMAIL_PROMPT_VERSION, system, content]).encode("utf-8")).digest()
 
 
-def candidate_map(inp: EmailInput) -> dict[str, Any]:
+def candidate_map(candidates: tuple[Candidate, ...]) -> dict[str, Any]:
     return {
         c.code: {
             "entity_type": c.entity_type,
@@ -153,7 +154,7 @@ def candidate_map(inp: EmailInput) -> dict[str, Any]:
             "version": c.version,
             "rejected": c.rejected,
         }
-        for c in inp.candidates
+        for c in candidates
     }
 
 
@@ -172,19 +173,45 @@ async def claim(
     prompt_version: str = EMAIL_PROMPT_VERSION,
     parent_extraction_id: UUID | None = None,
 ) -> Claim:
+    return await claim_key(
+        uow,
+        source_item_id=inp.source_item_id,
+        content_hash=inp.content_hash,
+        pipeline=pipeline,
+        prompt_version=prompt_version,
+        schema_version=EMAIL_SCHEMA if pipeline == "email_extract" else ADJ_SCHEMA,
+        input_digest=input_hash(inp),
+        candidates=candidate_map(inp.candidates),
+        parent_extraction_id=parent_extraction_id,
+    )
+
+
+async def claim_key(
+    uow: UnitOfWork,
+    *,
+    source_item_id: UUID,
+    content_hash: bytes,
+    pipeline: str,
+    prompt_version: str,
+    schema_version: str,
+    input_digest: bytes,
+    candidates: dict[str, Any],
+    parent_extraction_id: UUID | None = None,
+) -> Claim:
+    """Insert the ``running`` row for the extraction key or load (and lock) the existing one."""
     t = extractions_table
     await uow.session.execute(
         insert(t)
         .values(
             id=uuid7(),
             user_id=uow.user_id,
-            source_item_id=inp.source_item_id,
-            content_hash=inp.content_hash,
+            source_item_id=source_item_id,
+            content_hash=content_hash,
             pipeline=pipeline,
             prompt_version=prompt_version,
-            schema_version=EMAIL_SCHEMA if pipeline == "email_extract" else ADJ_SCHEMA,
-            input_hash=input_hash(inp),
-            candidate_map=candidate_map(inp),
+            schema_version=schema_version,
+            input_hash=input_digest,
+            candidate_map=candidates,
             parent_extraction_id=parent_extraction_id,
             status="running",
         )
@@ -194,8 +221,8 @@ async def claim(
         await uow.session.execute(
             select(t.c.id, t.c.status, t.c.attempts, t.c.apply_status)
             .where(
-                t.c.source_item_id == inp.source_item_id,
-                t.c.content_hash == inp.content_hash,
+                t.c.source_item_id == source_item_id,
+                t.c.content_hash == content_hash,
                 t.c.pipeline == pipeline,
                 t.c.prompt_version == prompt_version,
                 t.c.parent_extraction_id.is_not_distinct_from(parent_extraction_id),
@@ -221,6 +248,35 @@ async def run_email_extract(
     ``budget_exempt``: VIP sender or the user's outbound mail keep AI-01 at the hard cap (§7.2).
     A budget refusal is returned as ``deferred_for_s`` and does not count as a call (§7)."""
     system, content = render_email_prompt(inp)
+    return await run_background(
+        client,
+        "email_extract",
+        prompt_version=EMAIL_PROMPT_VERSION,
+        schema_version=EMAIL_SCHEMA,
+        output_model=EmailExtraction,
+        system=system,
+        content=content,
+        attempts_used=attempts_used,
+        user_id=user_id,
+        budget_exempt=budget_exempt,
+    )
+
+
+async def run_background(
+    client: AIClient,
+    role: str,
+    *,
+    prompt_version: str,
+    schema_version: str,
+    output_model: type[BaseModel],
+    system: str,
+    content: str,
+    attempts_used: int,
+    user_id: UUID | None,
+    budget_exempt: bool = False,
+) -> RunOutcome:
+    """The background attempt policy (§7) for an extraction role: fallback model from attempt 3,
+    one repair call with the validation error, at most ``ATTEMPT_CAP`` calls per key. No DB."""
     outcome = RunOutcome(ok=False)
     repair_note: str | None = None
     repaired = False
@@ -230,10 +286,10 @@ async def run_email_extract(
         outcome.calls += 1
         try:
             result = await client.generate(
-                "email_extract",
-                prompt_version=EMAIL_PROMPT_VERSION,
-                schema_version=EMAIL_SCHEMA,
-                output_model=EmailExtraction,
+                role,
+                prompt_version=prompt_version,
+                schema_version=schema_version,
+                output_model=output_model,
                 contents=[content],
                 system_instruction=system,
                 user_id=user_id,
@@ -333,6 +389,23 @@ async def ensure_completed_event(
     )
 
 
+async def reopen_failed(uow: UnitOfWork, extraction_id: UUID) -> Claim:
+    """A user's explicit retry of a ``failed_permanent`` key (``POST /recordings/{id}/retry``):
+    the attempt count restarts. Never called by a background path."""
+    t = extractions_table
+    row = (
+        await uow.session.execute(
+            update(t)
+            .where(t.c.id == extraction_id, t.c.status == "failed_permanent")
+            .values(status="failed_retryable", attempts=0, error_code=None)
+            .returning(t.c.id, t.c.status, t.c.attempts, t.c.apply_status)
+        )
+    ).one()
+    return Claim(
+        extraction_id=row.id, status=row.status, attempts=row.attempts, apply_status=row.apply_status
+    )
+
+
 async def store_failure(uow: UnitOfWork, claim_: Claim, outcome: RunOutcome) -> str:
     """Returns the new status: ``failed_retryable`` or ``failed_permanent`` (cap or non-retryable)."""
     t = extractions_table
@@ -399,6 +472,19 @@ async def latest_pending_for_source(uow: UnitOfWork, source_item_id: UUID) -> Ex
         )
     ).one_or_none()
     return None if row is None else _record(row)
+
+
+async def succeeded_for_source(
+    uow: UnitOfWork, source_item_id: UUID, pipeline: str
+) -> list[ExtractionRecord]:
+    """Succeeded extractions of one source and pipeline, oldest first (speaker re-pointing)."""
+    t = extractions_table
+    rows = await uow.session.execute(
+        select(*_COLS)
+        .where(t.c.source_item_id == source_item_id, t.c.pipeline == pipeline, t.c.status == "succeeded")
+        .order_by(t.c.created_at, t.c.id)
+    )
+    return [_record(r) for r in rows]
 
 
 async def succeeded_extractions(uow: UnitOfWork) -> list[ExtractionRecord]:

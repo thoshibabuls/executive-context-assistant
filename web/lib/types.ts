@@ -285,3 +285,85 @@ export type MeetingSuggestion = {
   ends_at: string;
   reason: "overlaps" | "recent";
 };
+
+// Meeting page and missed-meeting view (BACKEND_DESIGN.md §16.9, slice 4.3).
+export type TranscriptEvidence = {
+  id: string;
+  source_item_id: string;
+  quote: string;
+  relation: string | null;
+  occurred_at: string | null;
+  redacted: boolean;
+  start_ms: number | null;
+  end_ms: number | null;
+};
+
+export type MeetingItem = WorkItem & { evidence: TranscriptEvidence[] };
+
+export type MeetingDecision = {
+  id: string;
+  kind: "decision" | "open_question";
+  statement: string;
+  decided_at: string | null;
+  superseded_by_id: string | null;
+  resolved_by_id: string | null;
+  origin: string;
+  verification_status: string;
+  provenance: Provenance;
+  evidence: TranscriptEvidence[];
+};
+
+export type Speaker = {
+  label: string;
+  person_id: string | null;
+  person_name: string | null;
+  status: "applied" | "proposed" | "unmapped";
+  origin: "deterministic" | "ai" | "user" | null;
+  method: string | null;
+  confidence: number | null;
+  confirmed_at: string | null;
+};
+
+export type MeetingChange = {
+  entity_type: "work_item" | "decision";
+  entity_id: string;
+  kind: string;
+  title: string | null;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+};
+
+export type MeetingPage = {
+  meeting: {
+    id: string;
+    title: string | null;
+    description: string | null;
+    starts_at: string;
+    ends_at: string;
+    status: string;
+    origin: "calendar" | "upload";
+    processing_status: string;
+    version: number;
+    participants: { person_id: string; name: string | null; is_self: boolean }[];
+  };
+  recording: Recording | null;
+  summary: {
+    label: string;
+    text: string;
+    topics: string[];
+    concerns: { text: string; evidence_id: string; start_ms: number | null }[];
+    origin: "ai";
+    verification_status: string;
+    provenance: { model: string | null; prompt_version: string | null; derived_at: string | null };
+  } | null;
+  summary_status: "ready" | "pending" | "failed" | "none";
+  decisions: MeetingDecision[];
+  open_questions: MeetingDecision[];
+  items: { yours: MeetingItem[]; theirs: MeetingItem[]; others: MeetingItem[]; unresolved: MeetingItem[] };
+  speakers: Speaker[];
+  what_changed: {
+    previous_meeting: { id: string; title: string | null; starts_at: string } | null;
+    changes: MeetingChange[];
+    note?: string;
+  };
+};

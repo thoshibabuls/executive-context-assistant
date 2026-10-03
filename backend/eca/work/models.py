@@ -1,4 +1,4 @@
-"""Tables owned by ``work`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0008, 0012 and 0015."""
+"""Tables owned by ``work`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0008, 0012, 0015 and 0027."""
 
 from __future__ import annotations
 
@@ -73,6 +73,7 @@ decisions_table = Table(
     Column("rationale", Text),
     Column("decided_at", _TS),
     Column("conversation_id", _U),
+    Column("meeting_id", _U),
     Column("project_hint", Text),
     Column("superseded_by_id", _U),
     Column("resolved_by_id", _U),

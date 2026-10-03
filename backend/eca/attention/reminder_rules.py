@@ -32,6 +32,7 @@ WAITING_QUIET_WORKING_DAYS = 5
 FOLLOW_UP_WORKING_DAYS = 3
 MEETING_PREP_LEAD = datetime.timedelta(minutes=30)
 MEETING_HORIZON = datetime.timedelta(hours=24)
+QUESTION_WINDOW = datetime.timedelta(days=60)
 SNOOZE_LEARN_MIN = 3
 SNOOZE_SHIFT_MAX = datetime.timedelta(hours=4)
 OPEN = ("open", "in_progress")
@@ -327,10 +328,11 @@ class MeetingFacts:
     status: str
     open_items: int
     priority: float
+    open_questions: int = 0  # Phase 4: unresolved questions of prior related meetings and threads
 
 
 def meeting_candidate(meeting: MeetingFacts, now: datetime.datetime) -> Candidate | None:
-    if meeting.status == "cancelled" or meeting.open_items < 1:
+    if meeting.status == "cancelled" or (meeting.open_items < 1 and meeting.open_questions < 1):
         return None
     if not (now < meeting.starts_at <= now + MEETING_HORIZON):
         return None
@@ -344,7 +346,12 @@ def meeting_candidate(meeting: MeetingFacts, now: datetime.datetime) -> Candidat
         priority=meeting.priority,
         proactive_eligible=True,
         person_id=None,
-        reason={"rule": "meeting_prep", "slot": "once", "open_items": meeting.open_items},
+        reason={
+            "rule": "meeting_prep",
+            "slot": "once",
+            "open_items": meeting.open_items,
+            "open_questions": meeting.open_questions,
+        },
     )
 
 

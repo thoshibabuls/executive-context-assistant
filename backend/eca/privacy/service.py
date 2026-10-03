@@ -240,7 +240,10 @@ async def _purge_batch(uow: UnitOfWork, source_ids: list[UUID], *, now: datetime
     """One batch of sources, in one transaction. Returns the sources kept as tombstones."""
     extraction_ids = await intelligence.extraction_ids_for_sources(uow, source_ids)
     conversation_ids = await communication.conversation_ids_for_sources(uow, source_ids)
+    meeting_ids = await meetings.meeting_ids_for_sources(uow, source_ids)
     await retrieval.purge_sources(uow, source_ids)  # chunks reference sources, conversations, meetings
+    await retrieval.detach_meetings(uow, meeting_ids)  # transcript chunks of uploads stay (Phase 4)
+    await work.detach_meetings(uow, meeting_ids)  # decisions from uploads stay (Phase 4)
     await work.delete_links(uow, "conversation", conversation_ids)
     await people.purge_mentions_for_sources(uow, source_ids)
     await work.purge_sources(uow, source_ids, extraction_ids)

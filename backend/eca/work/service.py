@@ -165,10 +165,14 @@ async def add_evidence(
     quote: str,
     char_start: int | None,
     occurred_at: datetime.datetime,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
 ) -> UUID:
     await uow.session.execute(
         insert(evidence_table)
         .values(
+            start_ms=start_ms,
+            end_ms=end_ms,
             id=evidence_id,
             user_id=uow.user_id,
             source_item_id=source_item_id,

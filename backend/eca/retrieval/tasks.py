@@ -1,7 +1,7 @@
-"""Retrieval handlers: the index job on ``MessageNormalized``, ``MeetingChanged`` and (slice 4.2)
-``TranscriptStored``, chunk removal on ``SourceItemDeleted`` (BACKEND_DESIGN.md §15). Phase 3:
-AI-03 on ``ThreadSummaryDue`` (natural key, queue ``extract``) and the 5-minute
-``thread_summary_sweep``."""
+"""Retrieval handlers: the index job on ``MessageNormalized``, ``MeetingChanged``, (Phase 4)
+``TranscriptStored`` and ``SpeakerMappingChanged``, chunk removal on ``SourceItemDeleted``
+(BACKEND_DESIGN.md §15). Phase 3: AI-03 on ``ThreadSummaryDue`` (natural key, queue ``extract``)
+and the 5-minute ``thread_summary_sweep``."""
 
 from __future__ import annotations
 
@@ -11,7 +11,14 @@ from uuid import UUID
 from eca.communication import MESSAGE_NORMALIZED, MessageNormalized
 from eca.ingestion import SOURCE_ITEM_DELETED, SourceItemDeleted
 from eca.intelligence import AIClient
-from eca.meetings import MEETING_CHANGED, TRANSCRIPT_STORED, MeetingChanged, TranscriptStored
+from eca.meetings import (
+    MEETING_CHANGED,
+    SPEAKER_MAPPING_CHANGED,
+    TRANSCRIPT_STORED,
+    MeetingChanged,
+    SpeakerMappingChanged,
+    TranscriptStored,
+)
 from eca.platform.clock import Clock
 from eca.platform.events import HandlerContext, handles
 from eca.platform.jobs import PeriodicTaskSpec
@@ -31,6 +38,7 @@ INDEX_MESSAGE_HANDLER = "retrieval.index_message"
 INDEX_MEETING_HANDLER = "retrieval.index_meeting"
 INDEX_REMOVED_HANDLER = "retrieval.index_removed"
 INDEX_TRANSCRIPT_HANDLER = "retrieval.index_transcript"
+INDEX_SPEAKERS_HANDLER = "retrieval.index_speakers"
 THREAD_SUMMARY_HANDLER = "retrieval.thread_summary"
 THREAD_SUMMARY_SWEEP_TASK = "eca.retrieval.thread_summary_sweep"
 
@@ -101,6 +109,15 @@ async def on_transcript_stored(ctx: HandlerContext) -> None:
     payload = ctx.payload
     assert isinstance(payload, TranscriptStored)
     await index_recording(ctx, payload.recording_id)
+
+
+@handles(SPEAKER_MAPPING_CHANGED, name=INDEX_SPEAKERS_HANDLER, queue="embed", mode="natural_key")
+async def on_speaker_mapping_changed(ctx: HandlerContext) -> None:
+    """Transcript windows carry speaker names: re-index; unchanged windows keep their vectors."""
+    payload = ctx.payload
+    assert isinstance(payload, SpeakerMappingChanged)
+    if payload.recording_id is not None:
+        await index_recording(ctx, payload.recording_id)
 
 
 @handles(SOURCE_ITEM_DELETED, name=INDEX_REMOVED_HANDLER, queue="embed")

@@ -946,6 +946,65 @@
     "title": "SnoozeBody",
     "type": "object"
    },
+   "SpeakerMappingIn": {
+    "additionalProperties": false,
+    "properties": {
+     "label": {
+      "maxLength": 60,
+      "minLength": 1,
+      "title": "Label",
+      "type": "string"
+     },
+     "person_id": {
+      "anyOf": [
+       {
+        "format": "uuid",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Person Id"
+     }
+    },
+    "required": [
+     "label",
+     "person_id"
+    ],
+    "title": "SpeakerMappingIn",
+    "type": "object"
+   },
+   "SpeakersIn": {
+    "additionalProperties": false,
+    "properties": {
+     "base_version": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Base Version"
+     },
+     "mappings": {
+      "items": {
+       "$ref": "#/components/schemas/SpeakerMappingIn"
+      },
+      "maxItems": 40,
+      "minItems": 1,
+      "title": "Mappings",
+      "type": "array"
+     }
+    },
+    "required": [
+     "mappings"
+    ],
+    "title": "SpeakersIn",
+    "type": "object"
+   },
    "ValidationError": {
     "properties": {
      "ctx": {
@@ -2508,6 +2567,126 @@
      }
     },
     "summary": "List Meetings"
+   }
+  },
+  "/api/v1/meetings/{meeting_id}": {
+   "get": {
+    "description": "The meeting page and the missed-meeting view (PRD \u00a722, \u00a725): deterministic reads only.",
+    "operationId": "get_meeting_api_v1_meetings__meeting_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "meeting_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Meeting Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Meeting"
+   }
+  },
+  "/api/v1/meetings/{meeting_id}/speakers": {
+   "put": {
+    "description": "The user's speaker mapping (authority 5): user mappings survive re-extraction; items whose\nstatements came from a remapped label are re-pointed as ``actor = user`` events.",
+    "operationId": "put_speakers_api_v1_meetings__meeting_id__speakers_put",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "meeting_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Meeting Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "header",
+      "name": "If-Match",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "If-Match"
+      }
+     },
+     {
+      "in": "header",
+      "name": "Idempotency-Key",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Idempotency-Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SpeakersIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Put Speakers"
    }
   },
   "/api/v1/notifications": {

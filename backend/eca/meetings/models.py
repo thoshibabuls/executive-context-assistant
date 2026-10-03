@@ -1,4 +1,4 @@
-"""Tables owned by ``meetings`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0010, 0024 and 0025."""
+"""Tables owned by ``meetings`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0010, 0024, 0025 and 0027."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from sqlalchemy import (
     Table,
     Text,
 )
-from sqlalchemy.dialects.postgresql import BYTEA, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, BYTEA, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 metadata = MetaData()
@@ -42,6 +42,11 @@ meetings_table = Table(
     Column("origin", Text, nullable=False),
     Column("prep_brief", JSONB),
     Column("prep_brief_version", Integer, nullable=False),
+    Column("summary_extraction_id", _U),
+    Column("summary_method", Text),
+    Column("summary_model", Text),
+    Column("summary_prompt_version", Text),
+    Column("summary_derived_at", _TS),
     Column("version", Integer, nullable=False),
     Column("deleted_at", _TS),
 )
@@ -56,6 +61,15 @@ meeting_participants_table = Table(
     Column("is_organizer", Boolean, nullable=False),
     Column("attended", Boolean),
     Column("origin", Text, nullable=False),
+    Column("speaker_labels", ARRAY(Text), nullable=False),
+    Column("mapping_status", Text),
+    Column("mapping_origin", Text),
+    Column("mapping_method", Text),
+    Column("mapping_confidence", REAL),
+    Column("mapping_extraction_id", _U),
+    Column("mapping_model", Text),
+    Column("mapping_derived_at", _TS),
+    Column("mapping_confirmed_at", _TS),
 )
 
 recordings_table = Table(

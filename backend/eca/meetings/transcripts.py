@@ -353,7 +353,7 @@ class TranscriptView:
     duration_s: float | None
     segments: tuple[Segment, ...]
     attendee_ids: tuple[UUID, ...]
-    speaker_people: dict[str, UUID]  # label -> person with an applied mapping (slice 4.3)
+    speaker_people: dict[str, UUID]  # label -> person with an applied mapping
 
 
 async def current_transcript(uow: UnitOfWork, recording_id: UUID) -> TranscriptView | None:
@@ -390,6 +390,17 @@ async def current_transcript(uow: UnitOfWork, recording_id: UUID) -> TranscriptV
                 .order_by(mp.c.person_id)
             )
         )
+    speaker_people: dict[str, UUID] = {}
+    if row.meeting_id is not None:
+        for p in await uow.session.execute(
+            select(mp.c.person_id, mp.c.speaker_labels).where(
+                mp.c.user_id == uow.user_id,
+                mp.c.meeting_id == row.meeting_id,
+                mp.c.mapping_status == "applied",
+            )
+        ):
+            for label in p.speaker_labels or []:
+                speaker_people[label] = p.person_id
     segments = await load_segments(uow, recording_id, row.transcription_model)
     return TranscriptView(
         recording_id=row.id,
@@ -402,5 +413,5 @@ async def current_transcript(uow: UnitOfWork, recording_id: UUID) -> TranscriptV
         duration_s=float(row.duration_s) if row.duration_s is not None else None,
         segments=tuple(segments),
         attendee_ids=attendees,
-        speaker_people={},
+        speaker_people=speaker_people,
     )

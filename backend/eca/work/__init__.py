@@ -5,6 +5,7 @@ evidence, item_evidence, context_events, entity_links (Phase 2: thread continuat
 Orchestrates email extraction and apply (§5.6). Other modules import only from this package root.
 """
 
+from eca.work import meeting_pipeline as _meeting_pipeline  # registers the AI-10 extract handlers
 from eca.work import pipeline as _pipeline  # registers the extract and apply handlers
 from eca.work.actions import (
     DECISION_EDITABLE,
@@ -25,6 +26,16 @@ from eca.work.events import ADJUDICATION_NEEDED, WORK_ITEM_CHANGED, Adjudication
 from eca.work.fold import FoldEvent, FoldResult, fold
 from eca.work.links import EntityLink, delete_links, link_entities, links_of
 from eca.work.mapping import Mapped, authority, map_statement
+from eca.work.meeting_apply import apply_meeting_extraction, remap_speaker_items
+from eca.work.meeting_pipeline import MEETING_EXTRACT_HANDLER, MeetingExtractionRetry, extract_meeting
+from eca.work.meeting_read import (
+    MeetingChange,
+    MeetingWork,
+    changes_between,
+    meeting_work,
+    open_questions_for,
+    transcript_evidence,
+)
 from eca.work.pipeline import (
     APPLY_HANDLER,
     EXTRACT_HANDLER,
@@ -42,6 +53,7 @@ from eca.work.purge import (
     REDACTED,
     delete_unreferenced_evidence,
     detach_conversations,
+    detach_meetings,
     purge_sources,
     purge_user,
     sources_still_referenced,
@@ -104,7 +116,7 @@ from eca.work.service import (
 )
 from eca.work.time_sweep import TIME_SWEEP_TASK, SweepReport, periodic_tasks, sweep_all, sweep_user
 
-del _pipeline
+del _meeting_pipeline, _pipeline
 
 __all__ = [
     "ADJUDICATION_NEEDED",
@@ -113,6 +125,7 @@ __all__ = [
     "EXTRACT_HANDLER",
     "HINT_MIN_SIMILARITY",
     "LIFECYCLE_COMMANDS",
+    "MEETING_EXTRACT_HANDLER",
     "REDACTED",
     "TIME_SWEEP_TASK",
     "WORK_ITEM_CHANGED",
@@ -130,6 +143,9 @@ __all__ = [
     "HintSource",
     "ItemPriorityInput",
     "Mapped",
+    "MeetingChange",
+    "MeetingExtractionRetry",
+    "MeetingWork",
     "Page",
     "PersonWork",
     "RecomputeReport",
@@ -141,9 +157,11 @@ __all__ = [
     "add_note",
     "append_event",
     "apply_extraction",
+    "apply_meeting_extraction",
     "assign_project",
     "authority",
     "band",
+    "changes_between",
     "clear_closed_priority",
     "compatible_due",
     "compute",
@@ -160,6 +178,7 @@ __all__ = [
     "delete_unreferenced_evidence",
     "delete_user_item",
     "detach_conversations",
+    "detach_meetings",
     "edit_decision",
     "edit_item",
     "events_for",
@@ -168,6 +187,7 @@ __all__ = [
     "evidence_for",
     "evidence_id_for",
     "evidence_of",
+    "extract_meeting",
     "extract_source_item",
     "fold",
     "get_decision",
@@ -184,8 +204,10 @@ __all__ = [
     "list_items",
     "list_items_page",
     "map_statement",
+    "meeting_work",
     "merge_items",
     "open_items",
+    "open_questions_for",
     "periodic_tasks",
     "person_work",
     "priority_candidates",
@@ -196,6 +218,7 @@ __all__ = [
     "record_entity_event",
     "refold_all",
     "reject",
+    "remap_speaker_items",
     "resolve_due",
     "search_decisions",
     "search_items",
@@ -207,6 +230,7 @@ __all__ = [
     "sweep_all",
     "sweep_user",
     "timeline",
+    "transcript_evidence",
     "user_activity_since",
     "user_dedupe_key",
     "user_edit",

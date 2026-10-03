@@ -31,6 +31,7 @@ from eca.attention.events import REMINDER_DUE, ReminderDue
 from eca.attention.models import notifications_table, push_subscriptions_table, reminders_table
 from eca.attention.reminder_rules import (
     MEETING_HORIZON,
+    QUESTION_WINDOW,
     THEIRS,
     Calendar,
     Candidate,
@@ -181,9 +182,25 @@ async def _meetings(
                 status=m.status,
                 open_items=len(involved),
                 priority=max((i.priority_score or 0.0 for i in involved), default=0.0),
+                open_questions=await _open_questions(uow, m.id, sorted(attendees), now),
             )
         )
     return out
+
+
+async def _open_questions(
+    uow: UnitOfWork, meeting_id: UUID, attendees: list[UUID], now: datetime.datetime
+) -> int:
+    """Unresolved questions from a prior related meeting or from a thread with an attendee in the
+    last 60 days (TECHNICAL_DESIGN.md §15.4, Phase 4)."""
+    prior = [p.id for p in await meetings.prior_meetings(uow, meeting_id, limit=2)]
+    threads = await communication.conversations_with_people(
+        uow, attendees, since=now - QUESTION_WINDOW, limit=50
+    )
+    questions = await work.open_questions_for(
+        uow, meeting_ids=prior, conversation_ids=[t.id for t in threads], limit=50
+    )
+    return len(questions)
 
 
 async def evaluate(
@@ -561,6 +578,7 @@ def render(
     open_items: int,
     now: datetime.datetime,
     cal: Calendar,
+    open_questions: int = 0,
 ) -> str:
     """Fixed templates (PRD §19); the title is the user's own item title, quoted."""
     quoted = f"“{title}”"
@@ -579,7 +597,8 @@ def render(
         return f"No reply yet{who} on {quoted}."
     if reminder_type == "meeting_prep":
         start = _date(starts_at, cal, with_time=True)
-        return f"{quoted} starts at {start}. {open_items} open item(s) with the attendees."
+        questions = f" {open_questions} unresolved question(s)." if open_questions else ""
+        return f"{quoted} starts at {start}. {open_items} open item(s) with the attendees.{questions}"
     return quoted
 
 
@@ -631,6 +650,7 @@ async def views_of(uow: UnitOfWork, rows: Sequence[Any], *, now: datetime.dateti
             open_items=int((r.reason or {}).get("open_items", 0)),
             now=now,
             cal=cal,
+            open_questions=int((r.reason or {}).get("open_questions", 0)),
         )
         out.append(
             ReminderView(

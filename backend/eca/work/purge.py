@@ -189,3 +189,14 @@ async def sources_still_referenced(uow: UnitOfWork, source_ids: Sequence[UUID]) 
         select(ev.c.source_item_id).where(ev.c.source_item_id.in_(list(source_ids))).distinct()
     )
     return {r.source_item_id for r in rows}
+
+
+async def detach_meetings(uow: UnitOfWork, meeting_ids: Sequence[UUID]) -> None:
+    """Source purge of calendar meetings (Phase 4): decisions from an uploaded recording stay and
+    lose their meeting link."""
+    ids = list(meeting_ids)
+    if ids:
+        d = decisions_table
+        await uow.session.execute(
+            update(d).where(d.c.user_id == uow.user_id, d.c.meeting_id.in_(ids)).values(meeting_id=None)
+        )

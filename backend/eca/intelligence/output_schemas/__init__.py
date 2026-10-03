@@ -10,6 +10,15 @@ from eca.intelligence.output_schemas.email_extract import (
     StatusSignal,
     Triage,
 )
+from eca.intelligence.output_schemas.meeting_extract import (
+    Concern,
+    MeetingDecision,
+    MeetingExtraction,
+    MeetingSignal,
+    MeetingStatement,
+    SegmentEvidence,
+    SpeakerProposal,
+)
 from eca.intelligence.output_schemas.plan_query import PlanQuery
 from eca.intelligence.output_schemas.reply_guidance import ReplyGuidance
 from eca.intelligence.output_schemas.thread_summary import KeyPoint, ThreadSummary
@@ -19,13 +28,20 @@ __all__ = [
     "Adjudication",
     "Answer",
     "AnswerClaim",
+    "Concern",
     "DecisionOut",
     "EmailExtraction",
     "KeyPoint",
+    "MeetingDecision",
+    "MeetingExtraction",
+    "MeetingSignal",
+    "MeetingStatement",
     "Mention",
     "PlanQuery",
     "ReplyGuidance",
+    "SegmentEvidence",
     "SegmentOut",
+    "SpeakerProposal",
     "Statement",
     "StatusSignal",
     "ThreadSummary",

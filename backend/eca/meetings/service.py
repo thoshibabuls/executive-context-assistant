@@ -205,6 +205,7 @@ class MeetingDetail:
     series_key: str | None
     project_hint: str | None
     attendee_ids: tuple[UUID, ...]
+    origin: str = "calendar"  # calendar | upload (Phase 4)
 
 
 async def _details(uow: UnitOfWork, rows: list[Any]) -> list[MeetingDetail]:
@@ -230,6 +231,7 @@ async def _details(uow: UnitOfWork, rows: list[Any]) -> list[MeetingDetail]:
             r.series_key,
             r.project_hint,
             tuple(people[r.id]),
+            r.origin,
         )
         for r in rows
     ]
@@ -245,6 +247,7 @@ _DETAIL_COLS = (
     meetings_table.c.status,
     meetings_table.c.series_key,
     meetings_table.c.project_hint,
+    meetings_table.c.origin,
 )
 
 
@@ -302,3 +305,13 @@ async def meeting_details_between(
         )
     rows = (await uow.session.execute(stmt.order_by(m.c.starts_at, m.c.id).limit(limit))).all()
     return await _details(uow, list(rows))
+
+
+async def meeting_ids_for_sources(uow: UnitOfWork, source_item_ids: list[UUID]) -> list[UUID]:
+    m = meetings_table
+    if not source_item_ids:
+        return []
+    rows = await uow.session.execute(
+        select(m.c.id).where(m.c.user_id == uow.user_id, m.c.source_item_id.in_(source_item_ids))
+    )
+    return sorted(r.id for r in rows)

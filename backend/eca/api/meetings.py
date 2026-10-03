@@ -2,7 +2,10 @@
 
 Slice 4.1: upload init (``Idempotency-Key`` required, 10 per hour, sha256 dedupe), the local
 storage adapter's signed PUT target, complete, status, list, retry, meeting link and the upload
-dialog's meeting suggestions. Statuses and limits are decided in ``eca.meetings``; this module only
+dialog's meeting suggestions. Slice 4.3: the meeting page and missed-meeting view
+(``GET /meetings/{id}``, deterministic reads) and speaker confirmation (``PUT
+/meetings/{id}/speakers``: ``meetings.set_speaker_mapping`` and ``work.remap_speaker_items`` in one
+transaction, authority 5). Statuses and limits are decided in the domain modules; this module only
 maps them to HTTP.
 """
 
@@ -17,21 +20,27 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from eca import meetings
+from eca import meetings, people, work
 from eca.api.chat import _limiter as limiter
 from eca.api.common import (
     Cursors,
     Factory,
     IdempotencyKey,
+    IfMatch,
     User,
     as_json,
+    etag,
     idempotent,
     limit_of,
     now,
     page_body,
+    parse_if_match,
+    request_key,
 )
 from eca.api.problems import problem_response
-from eca.platform.errors import UpstreamUnavailable, ValidationFailed
+from eca.api.work import decision_json, evidence_json, item_json
+from eca.platform.errors import NotFound, UpstreamUnavailable, ValidationFailed
+from eca.platform.feedback import record_feedback
 from eca.platform.storage import LocalObjectStorage, ObjectStorage
 from eca.platform.uow import UnitOfWork
 
@@ -219,3 +228,273 @@ async def link_recording(
     async with factory(user_id=user.user_id) as uow:
         r = await meetings.link_meeting(uow, recording_id, body.meeting_id)
     return recording_json(r)
+
+
+# ---------------------------------------------------------------- meeting page (slice 4.3)
+
+YOURS = frozenset({"my_commitment", "my_task"})
+THEIRS = frozenset({"waiting_for", "delegated"})
+
+
+def _evidence(rows: list[work.EvidenceView]) -> list[dict[str, Any]]:
+    return [{**evidence_json(e), "start_ms": e.start_ms, "end_ms": e.end_ms} for e in rows]
+
+
+def summary_json(m: meetings.MeetingRecord) -> dict[str, Any] | None:
+    """The AI-10 summary is an inference: labelled, with origin, status and provenance."""
+    if not m.summary:
+        return None
+    return as_json(
+        {
+            "label": "AI summary",
+            "text": m.summary.get("text") or "",
+            "topics": m.summary.get("topics") or [],
+            "concerns": m.summary.get("concerns") or [],
+            "origin": "ai",
+            "verification_status": "suggested",
+            "provenance": {
+                "source": "ai_inference",
+                "extraction_method": "llm",
+                "extraction_id": m.summary_extraction_id,
+                "model": m.summary_model,
+                "prompt_version": m.summary_prompt_version,
+                "derived_at": m.summary_derived_at,
+            },
+        }
+    )
+
+
+async def _speakers(uow: UnitOfWork, meeting_id: UUID) -> list[dict[str, Any]]:
+    mappings = await meetings.speaker_mappings(uow, meeting_id)
+    labels = await meetings.transcript_labels(uow, meeting_id)
+    refs = await people.get_persons(uow, [m.person_id for m in mappings])
+    out: list[dict[str, Any]] = []
+    for label in labels:
+        owner = next((m for m in mappings if label in m.labels), None)
+        ref = refs.get(owner.person_id) if owner else None
+        out.append(
+            as_json(
+                {
+                    "label": label,
+                    "person_id": owner.person_id if owner else None,
+                    "person_name": (ref.display_name or ref.primary_email) if ref else None,
+                    "status": owner.status if owner else "unmapped",
+                    "origin": owner.origin if owner else None,
+                    "method": owner.method if owner else None,
+                    "confidence": owner.confidence if owner else None,
+                    "model": owner.model if owner else None,
+                    "derived_at": owner.derived_at if owner else None,
+                    "confirmed_at": owner.confirmed_at if owner else None,
+                }
+            )
+        )
+    return out
+
+
+async def _what_changed(uow: UnitOfWork, m: meetings.MeetingRecord, at: datetime.datetime) -> dict[str, Any]:
+    prior = await meetings.prior_meetings(uow, m.id, limit=1)
+    if not prior:
+        return {"previous_meeting": None, "changes": [], "note": "No previous related meeting."}
+    previous = prior[0]
+    self_p = await people.get_self_person(uow)
+    sources = [m.source_item_id, previous.source_item_id]
+    for mid in (m.id, previous.id):
+        rec = await meetings.recording_for_meeting(uow, mid)
+        if rec is not None and rec.source_item_id is not None:
+            sources.append(rec.source_item_id)
+    changes = await work.changes_between(
+        uow,
+        since=previous.ends_at,
+        until=min(m.ends_at, at),
+        person_ids=set(m.participant_ids) - {self_p.id},
+        source_item_ids=sources,
+        meeting_ids=[m.id, previous.id],
+    )
+    items = {
+        v.id: v
+        for v in await work.items_by_ids(uow, [c.entity_id for c in changes if c.entity_type == "work_item"])
+    }
+    decisions = {
+        d.id: d
+        for d in await work.decisions_by_ids(
+            uow, [c.entity_id for c in changes if c.entity_type == "decision"]
+        )
+    }
+    rows = []
+    for c in changes:
+        title = (
+            items[c.entity_id].title
+            if c.entity_id in items
+            else (decisions[c.entity_id].statement if c.entity_id in decisions else None)
+        )
+        rows.append(
+            as_json(
+                {
+                    "entity_type": c.entity_type,
+                    "entity_id": c.entity_id,
+                    "kind": c.kind,
+                    "title": title,
+                    "before": c.before,
+                    "after": c.after,
+                    "materiality": c.materiality,
+                    "recorded_at": c.recorded_at,
+                }
+            )
+        )
+    return {
+        "previous_meeting": as_json(
+            {
+                "id": previous.id,
+                "title": previous.title,
+                "starts_at": previous.starts_at,
+                "ends_at": previous.ends_at,
+            }
+        ),
+        "changes": rows,
+    }
+
+
+async def meeting_page(uow: UnitOfWork, meeting_id: UUID, *, at: datetime.datetime) -> dict[str, Any]:
+    m = await meetings.meeting_record(uow, meeting_id)
+    if m is None:
+        raise NotFound("meeting not found")
+    rec = await meetings.recording_for_meeting(uow, meeting_id)
+    mw = await work.meeting_work(
+        uow, meeting_id=meeting_id, source_item_id=rec.source_item_id if rec else None
+    )
+    refs = await people.get_persons(uow, m.participant_ids)
+    groups: dict[str, list[dict[str, Any]]] = {"yours": [], "theirs": [], "others": [], "unresolved": []}
+    for item in mw.items:
+        key = (
+            "yours"
+            if item.direction in YOURS
+            else "theirs"
+            if item.direction in THEIRS
+            else "unresolved"
+            if item.direction == "unresolved"
+            else "others"
+        )
+        groups[key].append({**item_json(item), "evidence": _evidence(mw.evidence.get(item.id, []))})
+    if m.summary:
+        summary_status = "ready"
+    elif rec is None:
+        summary_status = "none"
+    elif rec.status in ("failed", "rejected"):
+        summary_status = "failed"
+    else:
+        summary_status = "pending"
+    return {
+        "meeting": as_json(
+            {
+                "id": m.id,
+                "title": m.title,
+                "description": m.description,
+                "starts_at": m.starts_at,
+                "ends_at": m.ends_at,
+                "timezone": m.timezone,
+                "status": m.status,
+                "origin": m.origin,
+                "processing_status": m.processing_status,
+                "conference_uri": m.conference_uri,
+                "version": m.version,
+                "participants": [
+                    {
+                        "person_id": pid,
+                        "name": (refs[pid].display_name or refs[pid].primary_email) if pid in refs else None,
+                        "is_self": refs[pid].is_self if pid in refs else False,
+                    }
+                    for pid in m.participant_ids
+                ],
+            }
+        ),
+        "recording": recording_json(rec) if rec else None,
+        "summary": summary_json(m),
+        "summary_status": summary_status,
+        "decisions": [
+            {**decision_json(d), "evidence": _evidence(mw.evidence.get(d.id, []))} for d in mw.decisions
+        ],
+        "open_questions": [
+            {**decision_json(d), "evidence": _evidence(mw.evidence.get(d.id, []))} for d in mw.open_questions
+        ],
+        "items": groups,
+        "speakers": await _speakers(uow, meeting_id),
+        "what_changed": await _what_changed(uow, m, at),
+    }
+
+
+@router.get("/meetings/{meeting_id}")
+async def get_meeting(meeting_id: UUID, user: User, factory: Factory) -> JSONResponse:
+    """The meeting page and the missed-meeting view (PRD §22, §25): deterministic reads only."""
+    async with factory(user_id=user.user_id) as uow:
+        body = await meeting_page(uow, meeting_id, at=now())
+    return JSONResponse(body, headers={"ETag": etag(int(body["meeting"]["version"]))})
+
+
+class SpeakerMappingIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str = Field(min_length=1, max_length=60)
+    person_id: UUID | None
+
+
+class SpeakersIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mappings: list[SpeakerMappingIn] = Field(min_length=1, max_length=40)
+    base_version: int | None = None
+
+
+@router.put("/meetings/{meeting_id}/speakers")
+async def put_speakers(
+    meeting_id: UUID,
+    body: SpeakersIn,
+    user: User,
+    factory: Factory,
+    if_match: IfMatch = None,
+    idempotency_key: IdempotencyKey = None,
+) -> JSONResponse:
+    """The user's speaker mapping (authority 5): user mappings survive re-extraction; items whose
+    statements came from a remapped label are re-pointed as ``actor = user`` events."""
+    labels = [m.label for m in body.mappings]
+    if len(set(labels)) != len(labels):
+        raise ValidationFailed("each label may appear once")
+    base = parse_if_match(if_match) if if_match is not None else body.base_version
+    key = request_key(idempotency_key)
+    at = now()
+    async with factory(user_id=user.user_id) as uow:
+        wanted = [m.person_id for m in body.mappings if m.person_id is not None]
+        known = set(await people.get_persons(uow, wanted))
+        before, after = await meetings.set_speaker_mapping(
+            uow,
+            meeting_id,
+            [(m.label, m.person_id) for m in body.mappings],
+            base_version=base,
+            known_persons=known,
+            now=at,
+        )
+        await work.remap_speaker_items(uow, meeting_id, before=before, after=after, request_key=key, now=at)
+        for m in body.mappings:
+            await record_feedback(
+                uow,
+                target_type="speaker_mapping",
+                target_id=meeting_id,
+                action="speaker_confirmed" if m.person_id else "speaker_none_of_these",
+                before={"label": m.label, "person_id": str(before[m.label]) if m.label in before else None},
+                after={"label": m.label, "person_id": str(m.person_id) if m.person_id else None},
+            )
+        await work.record_entity_event(
+            uow,
+            entity_type="meeting",
+            entity_id=meeting_id,
+            event_type="speakers_confirmed",
+            actor="user",
+            authority=5,
+            materiality=2,
+            occurred_at=at,
+            dedupe_key=work.user_dedupe_key(key, "speakers_confirmed", meeting_id),
+            payload={"labels": labels},
+        )
+        speakers = await _speakers(uow, meeting_id)
+        record = await meetings.meeting_record(uow, meeting_id)
+        assert record is not None
+    return JSONResponse(
+        {"speakers": speakers, "version": record.version}, headers={"ETag": etag(record.version)}
+    )
