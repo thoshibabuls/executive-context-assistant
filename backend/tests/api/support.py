@@ -21,14 +21,18 @@ from uuid import UUID
 
 import psycopg
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from eca.api.app import create_app
+from eca.connections import create_connection
+from eca.connectors import ConnectorRegistry, FakeAccounts, NormalizedMessage
 from eca.identity import create_session, create_user
+from eca.ingestion import sync_mail
 from eca.people import create_self_person, resolve_address
 from eca.platform.clock import SystemClock
 from eca.platform.config import Settings
 from eca.platform.db import create_engine, create_session_factory
-from eca.platform.events import Resources
+from eca.platform.events import EventEnvelope, Resources
 from eca.platform.ids import uuid7
 from eca.platform.inline import InlineExecutor
 from eca.platform.storage import LocalObjectStorage, UploadSigner
@@ -62,6 +66,19 @@ class ApiHarness:
     # ("record"), or cassettes only ("replay"; a miss raises CassetteMiss).
     ai_mode: str = "live"
     cassette_dir: Path | None = None
+    accounts: FakeAccounts = field(default_factory=FakeAccounts)
+
+    @property
+    def connectors(self) -> ConnectorRegistry:
+        registry = ConnectorRegistry()
+        registry.register_mail("fake", self.accounts.mail_connector)
+        registry.register_calendar("fake", self.accounts.calendar_connector)
+        return registry
+
+    def connect_mail(self, user: ApiUser, messages: Sequence[NormalizedMessage]) -> UUID:
+        """A fake mail connection for ``user`` with these messages, synced once (no drain)."""
+        self.accounts.mail_feed(user.email).extend(messages)
+        return asyncio.run(_connect_and_sync(self, user))
 
     def request(self, user: ApiUser, method: str, url: str, **kwargs: Any) -> Any:
         headers = {**user.headers(), **kwargs.pop("headers", {})}
@@ -80,6 +97,15 @@ class ApiHarness:
     def drain(self) -> int:
         """Run every pending event through the production handlers (the worker's job)."""
         return asyncio.run(_drain(self))
+
+    def redeliver(self, event_types: Sequence[str]) -> int:
+        """Deliver every already dispatched event of these types again (duplicate dispatch, RT-08)."""
+        return asyncio.run(_redeliver(self, list(event_types)))
+
+    def redeliver_rows(self, rows: Sequence[tuple[Any, ...]]) -> None:
+        """Run outbox rows (id, user_id, event_type, aggregate_type, aggregate_id, payload,
+        correlation, created_at) through their handlers, as a job queued earlier would."""
+        asyncio.run(_run_rows(self, rows))
 
     def rows(self, query: str, params: Sequence[Any] = ()) -> list[tuple[Any, ...]]:
         with psycopg.connect(self.db.admin_url) as conn:
@@ -132,18 +158,94 @@ async def _new_person(db: TempDatabase, user_id: UUID, email: str, name: str) ->
         await engine.dispose()
 
 
+async def _connect_and_sync(h: ApiHarness, user: ApiUser) -> UUID:
+    api = create_engine(h.db.runtime_url, pool_size=1, max_overflow=0)
+    worker = create_engine(h.db.worker_url, pool_size=2, max_overflow=0)
+    try:
+        async with UnitOfWorkFactory(create_session_factory(api))(user_id=user.user_id) as uow:
+            connection_id = await create_connection(uow, provider="fake", account_email=user.email)
+        await sync_mail(
+            UnitOfWorkFactory(create_session_factory(worker)),
+            h.connectors,
+            user_id=user.user_id,
+            connection_id=connection_id,
+            now=datetime.datetime.now(datetime.UTC),
+            owner="api-harness",
+        )
+        return connection_id
+    finally:
+        await api.dispose()
+        await worker.dispose()
+
+
+def _resources(h: ApiHarness, factory: UnitOfWorkFactory) -> Resources:
+    if h.ai_mode == "replay":
+        assert h.cassette_dir is not None
+        client = replay_ai_client(h.cassette_dir, uow_factory=factory)
+    else:
+        record_to = h.cassette_dir if h.ai_mode == "record" else None
+        client = fake_ai_client(h.fake_ai, uow_factory=factory, cassette_dir=record_to)
+    return Resources.of(LocalObjectStorage(h.objects, storage_signer()), client, SystemClock(), h.connectors)
+
+
 async def _drain(h: ApiHarness) -> int:
     engine = create_engine(h.db.worker_url, pool_size=4, max_overflow=0)
     try:
         factory = UnitOfWorkFactory(create_session_factory(engine))
-        if h.ai_mode == "replay":
-            assert h.cassette_dir is not None
-            client = replay_ai_client(h.cassette_dir, uow_factory=factory)
-        else:
-            record_to = h.cassette_dir if h.ai_mode == "record" else None
-            client = fake_ai_client(h.fake_ai, uow_factory=factory, cassette_dir=record_to)
-        resources = Resources.of(LocalObjectStorage(h.objects, storage_signer()), client, SystemClock())
-        return await InlineExecutor(factory, production_registry(), resources).drain()
+        return await InlineExecutor(factory, production_registry(), _resources(h, factory)).drain()
+    finally:
+        await engine.dispose()
+
+
+async def _redeliver(h: ApiHarness, event_types: list[str]) -> int:
+    engine = create_engine(h.db.worker_url, pool_size=4, max_overflow=0)
+    try:
+        factory = UnitOfWorkFactory(create_session_factory(engine))
+        executor = InlineExecutor(factory, production_registry(), _resources(h, factory))
+        async with factory(user_id=None) as uow:
+            rows = (
+                (
+                    await uow.session.execute(
+                        text(
+                            "SELECT id, user_id, event_type, aggregate_type, aggregate_id, payload, "
+                            "correlation, "
+                            "created_at FROM outbox WHERE status = 'dispatched' AND event_type = ANY(:types) "
+                            "ORDER BY created_at, id"
+                        ),
+                        {"types": event_types},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        for row in rows:
+            await executor.run_envelope(EventEnvelope.model_validate(dict(row)).model_dump(mode="json"))
+        await executor.drain()
+        return len(rows)
+    finally:
+        await engine.dispose()
+
+
+_ENVELOPE_FIELDS = (
+    "id",
+    "user_id",
+    "event_type",
+    "aggregate_type",
+    "aggregate_id",
+    "payload",
+    "correlation",
+    "created_at",
+)
+
+
+async def _run_rows(h: ApiHarness, rows: Sequence[tuple[Any, ...]]) -> None:
+    engine = create_engine(h.db.worker_url, pool_size=4, max_overflow=0)
+    try:
+        factory = UnitOfWorkFactory(create_session_factory(engine))
+        executor = InlineExecutor(factory, production_registry(), _resources(h, factory))
+        for row in rows:
+            envelope = EventEnvelope.model_validate(dict(zip(_ENVELOPE_FIELDS, row, strict=True)))
+            await executor.run_envelope(envelope.model_dump(mode="json"))
     finally:
         await engine.dispose()
 

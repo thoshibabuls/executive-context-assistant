@@ -58,6 +58,12 @@ class FakeFeed(Generic[T]):
     fail_after_pages: int | None = None  # raise once after serving this many pages
     expire_cursors_below: int = 0  # cursors < this raise CursorExpired
     pages_served: int = 0
+    pending_deletions: list[str] = field(default_factory=list)  # reported once, on the next page
+
+    def delete(self, external_id: str) -> None:
+        """The provider permanently deletes an item: the next sync reports its ID as deleted."""
+        self._items = [d for d in self._items if getattr(d.item, "external_id", None) != external_id]
+        self.pending_deletions.append(external_id)
 
     def add(self, item: T, *, delivered_at: datetime.datetime | None = None) -> None:
         when = delivered_at or _EPOCH
@@ -85,9 +91,10 @@ class FakeFeed(Generic[T]):
         chunk = visible[start : start + self.page_size]
         end = start + len(chunk)
         self.pages_served += 1
+        deleted, self.pending_deletions = tuple(self.pending_deletions), []
         return SyncBatch(
             items=tuple(chunk),
-            deleted_external_ids=(),
+            deleted_external_ids=deleted,
             next_page_token=str(end) if end < len(visible) else None,
             high_water_cursor=str(len(visible)),
         )
