@@ -1,6 +1,6 @@
 # Implementation Plan — Executive Context Assistant
 
-**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete). Phase 1: code written, untested (§0.5). Phase 2: code complete, tests deferred (§0.6) — not complete until its tests and exit criteria pass. Phase 3: code complete, tests deferred (§0.7) — not complete until its tests and exit criteria pass. Phase 4: in progress — coding only; tests deferred (§0.8). The MVP is not complete
+**Status:** Phase 0 in progress — slices 0.1 and 0.2 implemented; their CI lint and test jobs pass, but the CI run is red because the `secrets` job fails before scanning (§0); slice 0.3 implemented, local verification in progress (§0: 100-run criterion not yet complete). Phase 1: code written, untested (§0.5). Phase 2: code complete, tests deferred (§0.6) — not complete until its tests and exit criteria pass. Phase 3: code complete, tests deferred (§0.7) — not complete until its tests and exit criteria pass. Phase 4: code complete, tests deferred (§0.8) — not complete until its tests and exit criteria pass. The MVP is not complete
 **Date:** 2026-10-02
 **Authority:** Execution order, slices, deliverables and exit criteria. Architecture is defined in `TECHNICAL_DESIGN.md` and the documents in its §5.1; this plan must not introduce behaviour or architecture that those documents do not describe (`CLAUDE.md`: "If implementation requires changing product behavior, stop and update the appropriate document first").
 
@@ -8,7 +8,7 @@
 
 ## 0. Implementation status
 
-Last updated 2026-10-03 (Phase 4 in progress, coding only, tests deferred, §0.8; Phase 3 code complete, tests deferred, §0.7; Phase 1 slices 1.1–1.9 code written and untested, §0.5; slice 0.3 locally verified; slices 0.4 and 0.5 implemented, local results in §0.4; CI run 2: lint and test pass, overall red because of the `secrets` job).
+Last updated 2026-10-03 (Phase 4 code complete, tests deferred, §0.8; Phase 3 code complete, tests deferred, §0.7; Phase 1 slices 1.1–1.9 code written and untested, §0.5; slice 0.3 locally verified; slices 0.4 and 0.5 implemented, local results in §0.4; CI run 2: lint and test pass, overall red because of the `secrets` job).
 
 | Slice | Code | Verification |
 |---|---|---|
@@ -139,11 +139,22 @@ Existing test files were edited only to move the migration head constants and pe
 
 **Phase 3 decisions recorded in the authoritative documents before coding:** module placement and dependencies, plus two new import-linter contracts (`attention` and `people` never import `intelligence`) (`BACKEND_DESIGN.md` §5.2); RLS and roles of every new table (§7.6); schema and migrations 0018–0023, including the `notifications` key `(reminder_id, channel, seq)` and the `priority_pairs` schema (§17.6, §10.1); jobs (§15); routes (§16.8); reminder rule parameters, quiet hours and Web Push key handling (`TECHNICAL_DESIGN.md` §15.4); priority fitting (§12.8); budget configuration, guard and degradation routes (`AI_COST_MODEL.md` §7.2); AI-03, gist timeline and AI-08 details (`AI_PIPELINE.md` §5.9); relationship-profile parameters and the reply-guidance budget (`CONTEXT_ARCHITECTURE.md` §5.3, §9.6); the `priority_pairs.jsonl` label format (`AI_EVALUATION.md` §4.5).
 
-### 0.8 Phase 4 status — in progress: coding only; tests deferred
+### 0.8 Phase 4 status — code complete, tests deferred
 
 At the owner's instruction ("Phase 4 — coding only; testing is deferred to a later task"), slices 4.1–4.4 are written in the order 4.1 → 4.2 → 4.3 → 4.4 without writing or running any test. Static checks (ruff, ruff format, mypy strict, lint-imports) run through the pre-commit hooks on every commit, and the web app must pass `tsc --noEmit`. No live Gemini call is made; experiments X4, X5, X8 and X10 are not run. Phase 4 builds on the untested Phase 1–3 code (§0.5–§0.7) and inherits that risk. **Phase 4 is the last MVP phase, but the MVP is not complete** until the deferred tests of Phases 1–4 and the MVP release gate (`AI_EVALUATION.md` A5) pass.
 
 **Preconditions found (2026-10-03).** Calendar meetings and `MeetingChanged` (1.6), the extraction lifecycle with deterministic evidence IDs (1.4), chunking and indexing with the `TranscriptStored` trigger deferred (2.1), packets and the meeting session scope (2.2), chat sessions (2.4), the change feed (2.3), reminders including `meeting_prep` (3.1), the budget guard with per-role stops for AI-09/10/11 (3.5a), the roles `transcribe`, `meeting_extract` and `meeting_asks` in `config/models.yaml`, Files API upload and delete in the Gemini provider, cassettes, the meter, auth, CSRF, `Idempotency-Key` and the web app with its generated client exist in code; none is verified by tests. Gaps that Phase 4 closes in code: `AIClient` did not expose the Files API and the cassette key identified files by URI; the rate limiter knew per-minute limits only; no `GET /meetings/{id}`; `decisions` had no `meeting_id`; no path resolved open questions. **External prerequisites:** object storage has no hosting decision (Q1 open): a provider-neutral port with a local-filesystem adapter is built for development (`TECHNICAL_DESIGN.md` §10.6). ffmpeg/ffprobe are installed on the development machine (ffmpeg 9.0); there is no deployment image in the repository yet, so no image contains them (to add with Q1).
+
+**Code written (2026-10-03), not tested.** Every commit passed the pre-commit hooks (gitleaks, ruff, ruff format, mypy strict, lint-imports with 15 contracts kept); the web app passes `tsc --noEmit`; `web/openapi.json` and `web/lib/schema.d.ts` were regenerated. No pytest run covers migrations 0024–0027 or any Phase 4 code; the test files were only edited to move the migration head constants to `0027`.
+
+| Slice | Commit | Code | Migrations |
+|---|---|---|---|
+| 4.1 Upload | `5dd2f4b` | Storage port with the local adapter and signed upload tokens; `recordings`; upload init (sha256 dedupe, `Idempotency-Key`, 10/hour), complete, status, list, retry, meeting link, suggestions; upload sweep; account deletion of objects; web upload dialog and status list | 0024 |
+| 4.2 Media and transcription | `0859ce7` | Transcript file parsers (VTT, SRT, TXT, DOCX with zip-bomb limits); ffprobe/ffmpeg (mono 16 kHz Opus, audio only); `media_prepare` and `transcribe` under `media:{recording}` with stage attempts; AI-09 through the Files API with the 60-minute window fallback, provider file reuse and deletion; versioned `transcript_segments`; `TranscriptStored`; transcript window indexing; raw media retention and expired provider references in `media_sweep` | 0025, 0026 |
+| 4.3 Meeting extraction | `29d2db5` | Deterministic speaker matching; AI-10 (`meeting_extract.v1`) through the extraction lifecycle under `mx:{recording}:{hash}:{version}`; apply with segment grounding, `unresolved` direction, decisions with `resolves`/`supersedes`/`contradicts` and context events, grounded concerns, summary with provenance; AI proposals applied only at ≥ 0.9; `PUT /meetings/{id}/speakers` with authority-5 re-pointing; `GET /meetings/{id}` with the missed-meeting sections and the net-change diff; `meeting_prep` counts unresolved questions; source purge detaches chunks and decisions; web meeting page | 0027 |
+| 4.4 Meeting prep and chat | `3232078` | Deterministic prep sections with the versioned cache key and jobs (`prep_meeting`, `prep_item`, `prep_processed`, `prep_sweep`); AI-11 (`meeting_asks.v1`) once per version, skipped at the soft cap; `GET /meetings/{id}/prep`, `POST /meetings/{id}/prep/asks`; rules-only meeting intents, S4/S5/MQ retrievers and budgets, `since_last_meeting`, meeting session scope with recording sources; web prep view and meeting-scoped chat | — |
+
+**Known gaps (code):** the hosted storage adapter (GCS or S3) waits for Q1, so uploads work only with the development adapter; no deployment image installs ffmpeg; an operator-approved re-transcription is not built (by design for the MVP); the S4 chat retriever rebuilds the prep content from `work` and `meetings` rather than reading the stored sections; prep sections list at most 20 entries per section; speaker re-pointing covers items created from statements, not status signals.
 
 **Deferred tests** (from the Tests column of §6; none written or run in this task):
 
@@ -568,7 +579,7 @@ Provider deletion flow (§9.3), source purge on disconnect, account deletion job
 
 **Phase 4 exit:** PRD §57 items 14–19; full MVP release gate (`AI_EVALUATION.md` A5).
 
-**Status:** in progress — coding only; tests deferred (§0.8). Build order 4.1 → 4.2 → 4.3 → 4.4. The MVP is not complete until the deferred tests of Phases 1–4 and the A5 release gate pass.
+**Status:** code complete, tests deferred (§0.8). Built in the order 4.1 → 4.2 → 4.3 → 4.4. The MVP is not complete until the deferred tests of Phases 1–4 and the A5 release gate pass.
 
 ---
 
