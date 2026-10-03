@@ -7,6 +7,8 @@ precision/recall drift and future learning. ``before`` and ``after`` hold field 
 
 from __future__ import annotations
 
+import datetime
+import decimal
 from typing import Any
 from uuid import UUID
 
@@ -34,6 +36,19 @@ feedback_events_table = Table(
 )
 
 
+def _json_value(value: Any) -> Any:
+    """Field values as JSON: dates as ISO 8601, IDs and decimals as strings."""
+    if isinstance(value, datetime.datetime | datetime.date):
+        return value.isoformat()
+    if isinstance(value, UUID | decimal.Decimal):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _json_value(v) for k, v in value.items()}
+    if isinstance(value, list | tuple | set | frozenset):
+        return [_json_value(v) for v in value]
+    return value
+
+
 async def record_feedback(
     uow: UnitOfWork,
     *,
@@ -50,8 +65,8 @@ async def record_feedback(
             target_type=target_type,
             target_id=target_id,
             action=action,
-            before=before,
-            after=after,
+            before=_json_value(before) if before is not None else None,
+            after=_json_value(after) if after is not None else None,
         )
     )
 
