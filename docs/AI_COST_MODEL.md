@@ -173,6 +173,13 @@ Background roles (AI-01, AI-02, AI-03, AI-04, AI-09, AI-10) also stop for every 
 
 - **Audit and alerts.** After each roll-up, the `cost_rollup` task (worker) writes one `audit_log` row per user, cap and UTC day when a user's spend first reaches the soft or hard cap (`ai_budget_soft_cap_reached`, `ai_budget_hard_cap_reached`; actor `system`; metadata `{date, level}`), and one row with `user_id` NULL when the global spend reaches the alert fraction or the budget (`ai_global_budget_alert`, `ai_global_budget_reached`). The hard-cap and global rows are also logged at error level: the operator alert of §7 until a paging channel exists. Rows are deduplicated by checking for the same action and date first (`TECHNICAL_DESIGN.md` §17.7).
 
+### 7.3 Phase 4 enforcement (decided 2026-10-03)
+
+- **Meeting limits** (§7): a media recording longer than 3 h is rejected (`duration_limit`); a recording that would take the user's media hours of the last 7 × 24 h above 10 h is rejected (`weekly_limit`). Both are checked in `media_prepare` right after `ffprobe`, before any transcription spend, from the probed duration; the API cannot know the duration at upload time. Transcript files cost no transcription and are not counted. The values come from `config/budgets.yaml` (`meetings: {max_upload_hours: 3, max_weekly_hours: 10}`); changing them is a major change (§9).
+- **Upload rate limit:** 10 upload inits per user per hour in the API (`BACKEND_DESIGN.md` §16.6), ≤ 2 GiB per media file.
+- **Per-role stops** (§7.2): AI-09 and AI-10 stop at the hard cap and for everyone when the global budget is spent (background roles): the recording keeps its stage with `next_attempt_at` = the window reset, no attempt counted. AI-11 stops at the soft cap: the prep view shows the deterministic sections only.
+- **Metering:** AI-09 calls pass the probed duration as `audio_seconds` (per-minute price of the speech model); AI-10 and AI-11 are metered by tokens. Every call writes `ai_calls` with the user's ID.
+
 ---
 
 ## 8. Telemetry

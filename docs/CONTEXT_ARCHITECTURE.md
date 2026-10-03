@@ -508,6 +508,18 @@ Values the sections above leave open, fixed before coding. Changing any of them 
 | Untrusted text | Every quote, chunk, subject and name in a packet is delimited by `<<<` and `>>>`; occurrences of those markers inside content are replaced by `‹‹‹` and `›››`. User notes are never packed (`AI_PIPELINE.md` §15) |
 | Traces | One `retrieval_traces` row per assembly, content-free: plan, candidate and selected IDs with scores, coverage statuses and times, token counts, latency; the question only as a SHA-256 hash |
 
+### 9.11 Phase 4 implementation parameters (decided 2026-10-03)
+
+| Topic | Decision |
+|---|---|
+| Transcript chunks (§9.9) | Built from the recording's current transcript version. Consecutive segments of one speaker form a **turn**; a turn above 800 tokens is split at sentence ends. Windows are packed greedily from turns: a window closes when it reaches 600 tokens or when the next turn would take it above 800; the next window starts with the previous window's last turn (one-turn overlap) when that turn has at most 200 tokens. A last window under 50 tokens joins the previous one. Line format `[mm:ss] Name: text` (the mapped person's display name, else the label). `kind = transcript`, `title` = meeting title, `source_item_id` = the recording's source item, `meeting_id` = the recording's meeting, `occurred_at` = meeting start + window start, `start_ms`/`end_ms` of the window, `person_ids` = mapped speakers and attendees without the user. Re-indexed on `TranscriptStored` and on `SpeakerMappingChanged` (names change); unchanged text keeps its embedding |
+| Meeting session scope (§9.7, §13) | Allowed sources: the meeting's own sources (calendar event and recording) plus those of up to 2 prior related meetings (`TECHNICAL_DESIGN.md` §16.1 rule, now including title similarity, A13). Items and decisions qualify when their evidence comes from those sources; decisions also by `meeting_id` |
+| `since_last_meeting` (§7.1) | Window from `ends_at` of the most recent meeting that ended before now (not cancelled), with the named person when the question names one (the first match), to now; basis `meeting`. No such meeting → "recently" with a note |
+| S4 meeting preparation (§10.4) | Target meeting: the session's meeting; else a meeting named by title words or a person today or tomorrow; else the next meeting within 24 h. Packet: the deterministic prep sections as cards (anchor), the prior meetings' decisions and open questions with their resolution events (anchor timeline), the attendees' open items, up to 3 transcript or email chunks on the question's topic restricted to attendee-linked sources of 30 days (evidence). T2 (AI-07) |
+| S5 cross-meeting (§10.5) | Prior meeting set of up to 5; decisions and open questions of those meetings (and their `resolved_by`/`superseded_by` chains, from any source, A8) ordered by `occurred_at`; hybrid search on the topic restricted to those meetings' sources. T2 (AI-07) |
+| Meeting Q&A in a meeting session (O10) | `meeting_lookup` deterministic (items of the meeting with owners and due dates, decisions, open questions; grouped by the asked kind); `meeting_transcript` T1 (AI-06) over hybrid search restricted to the meeting's transcript chunks plus the meeting's items; `meeting_synthesis` T2 (AI-07) over the summary, concerns, decisions, items and the top transcript chunks |
+| Budgets (§9.6) | S4 and S5 as §9.6. New scenario **MQ** (meeting Q&A lookups): dynamic 3 K, hard cap 6 K (as S2); `meeting_synthesis` uses S5's budget |
+
 ---
 
 ## 10. Retrieval design per scenario

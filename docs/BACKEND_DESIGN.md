@@ -157,6 +157,23 @@ every module → platform
 
 `attention` and `people` never import `intelligence`: priority, reminders, briefings, profiles and person cards are deterministic (`AI_PIPELINE.md` §3, "avoided by design"). Two import-linter `forbidden` contracts enforce it.
 
+**Phase 4 (decided 2026-10-03).** One new edge between domain modules: **`work → meetings`**. `work` orchestrates AI-10 meeting extraction and its apply exactly as it orchestrates AI-01 for email (§5.6), because the candidates (open items, open questions, decisions) and every table apply writes are its own; it reads transcripts, participants, speaker mappings and prior meetings through `meetings`' public API. `meetings` never imports `work`, `attention`, `communication`, `projects`, `retrieval` or `chat` (a new import-linter `forbidden` contract). Where each Phase 4 feature lives:
+
+| Feature | Module | Reads | Writes |
+|---|---|---|---|
+| Upload init, complete, status, retry, meeting link, upload sweep | `meetings` | `ingestion` (source items), objects through `platform.storage` | `recordings`; the upload's `source_items` row through `ingestion.register_upload`; outbox `RecordingUploaded` |
+| `media_prepare` (ffprobe, ffmpeg), transcript-file parsing, AI-09 | `meetings` (`meetings → intelligence`, already in the graph) | the uploaded object | the prepared audio object, `transcript_segments`, `recordings` status, outbox `RecordingPrepared`, `TranscriptStored` |
+| Deterministic speaker matching (self-introductions, elimination) | `meetings` (pure functions) | segments, participants, persons through `people` | `meeting_participants.speaker_labels` and `mapping_*` |
+| AI-10 extract and apply | `work` (`work → meetings`, `work → intelligence`) | `meetings` (transcript, participants, mappings, prior meetings), its own candidate list | `extractions` (through `intelligence`), `work_items`, `decisions` (with `meeting_id`), `evidence` (with `start_ms`/`end_ms`), `context_events`, `entity_mentions` (through `people`); the meeting summary, AI speaker proposals and the processing status through `meetings.store_summary`, `meetings.record_ai_mappings` and `meetings.mark_processed` (`meetings` stays the single writer) |
+| "What changed since the previous meeting" | `work` (owner of `context_events`), read-only SQL | `context_events`, items, decisions | — |
+| Prep sections | `attention` (deterministic) | `work`, `meetings`, `people` read APIs | `meetings.prep_brief` through `meetings.store_prep_sections` |
+| AI-11 suggested asks | `retrieval` (already imports `meetings` and `intelligence`; it orchestrates AI-03 the same way) | the stored prep sections (`meetings.get_prep`) | `meetings.prep_brief.asks` through `meetings.store_prep_asks` |
+| Transcript indexing, S4 and S5 retrievers, meeting lookups | `retrieval` | `meetings`, `work`, `people` | `chunks` |
+| Speaker confirmation (`PUT /meetings/{id}/speakers`) | API composition: `meetings.set_speaker_mapping` and `work.remap_speaker_items` in one transaction (as person corrections in Phase 3) | — | `meeting_participants` (authority 5); item events with `actor = user` |
+| Raw media retention, account deletion of objects | `meetings` | `recordings` | objects through `platform.storage`; provider files through `intelligence` |
+
+Object storage is a `platform` port (§5.1 lists object storage among `platform`'s services), so using it adds no domain edge. ffmpeg and ffprobe run only in `meetings`' media module, only in worker jobs, never in the API process.
+
 Reactions that would create cycles (e.g., `work` changes → `attention` recomputes) go through outbox events. The graph is acyclic: no module imports one that (directly or indirectly) imports it. Phase 2 adds import-linter `forbidden` contracts that keep it so: `work`, `people`, `communication`, `meetings`, `ingestion`, `identity`, `connections` and `attention` never import `retrieval`, `projects` or `chat`; `retrieval` and `projects` never import `chat`; `projects` never imports `retrieval`.
 
 ### 5.3 Enforcement
@@ -509,6 +526,8 @@ The privilege-matrix test classifies every Batch A table as a business table wit
 
 **Phase 3 tables (migrations 0018–0023).** `reminders`, `notifications`, `push_subscriptions`, `briefings`, `priority_pairs` and `user_priority_weights` are user-owned business tables: ENABLE and FORCE RLS through `eca.platform.rls.user_isolation_ddl`, DML for both runtime roles through the default privileges of `0001`/`0002`, and no exception. The API role reads reminders and notifications and writes user state transitions (snooze, dismiss, acted, read), push subscriptions, on-demand briefings and priority pairs in the request's user transaction. The worker role evaluates and delivers reminders, writes notifications, generates briefings and fits weights in the event's or the sweep's user transaction, one user per transaction. Column additions to `persons` (0018) and `conversations` (0021) keep those tables' existing policies. No new cross-user policy is added. The Phase 3 budget guard reads `ai_cost_rollups` through the existing policies: the API role its own user's rows, the worker role all rows for the global budget (`AI_COST_MODEL.md` §7.2). Budget-cap audit rows are written by the worker's `cost_rollup` task through `audit_log_worker_all`.
 
+**Phase 4 tables (migrations 0024–0027).** `recordings` and `transcript_segments` are user-owned business tables: ENABLE and FORCE RLS through `eca.platform.rls.user_isolation_ddl`, DML for both runtime roles through the default privileges of `0001`/`0002`, and no exception. The API role creates recordings (upload init), moves them to `uploaded` (complete), links them to meetings and reads their status and transcripts in the request's user transaction; the worker role runs the media stages, stores transcripts and purges raw media in the event's or the sweep's user transaction, one user per transaction. The column additions to `meetings`, `meeting_participants`, `decisions` (0026) and `chunks` (0027) keep those tables' existing policies. No new cross-user policy is added. Objects in storage are keyed by user and recording (`recordings/<user_id>/<recording_id>/…`); the storage port has no listing call, so a process can reach only keys it reads from the user's own `recordings` rows.
+
 **Sign-in and session tables (slices 1.1, 1.2; migration 0009).**
 - `auth_sessions`, `deletion_jobs`: business tables under `_user_isolation`.
 - `oauth_states`: single-use OAuth `state` rows (SHA-256 of the state, PKCE verifier, nonce; 10-minute expiry). They exist before a user is known, so they are not user-scoped: `oauth_states_api_all FOR ALL TO eca_app`, no worker access.
@@ -843,6 +862,13 @@ Rules:
 
 `POST /recordings` → pre-signed URL → client upload → `POST /recordings/{id}/complete` → object `HEAD` (size, checksum) → `RecordingUploaded` → media pipeline. Uploads not completed within 24 h are removed.
 
+**Phase 4 upload details (decided 2026-10-03).**
+
+- **Object storage port** (`eca.platform.storage`, `TECHNICAL_DESIGN.md` §10.6): `presign_put(key, content_type, max_bytes, expires_in)` → URL, method `PUT`, required headers and expiry; `head(key)` → size or none; `local_path(key)` / `download(key, path)`; `put_file(key, path, content_type)`; `delete(key)` (idempotent). No listing call. One adapter is built in the MVP: **local filesystem** (`API_STORAGE_BACKEND=local`, root `API_STORAGE_LOCAL_DIR`, default `<repository>/.data/objects`, git-ignored). Its "pre-signed URL" is `PUT /api/v1/uploads/{token}` on the API: the token is `base64url(payload).base64url(HMAC-SHA256(STORAGE_SIGNING_KEY, payload))` with payload `{key, content_type, max_bytes, exp}`; the route needs no session (the signature is the authorization, as with a cloud pre-signed URL), checks signature, expiry (1 hour), `Content-Type` and the byte limit while streaming, writes `<key>.part` and renames it on success. The local adapter is refused when `API_ENV` is production. The hosted adapter (GCS or S3, private bucket, lifecycle rules) is chosen with the hosting decision (Q1); the port does not change.
+- **Init** (`POST /recordings`, `Idempotency-Key` required): body `{mime, bytes, sha256, title?, occurred_at?, meeting_id?}`. Accepted types: audio (`audio/mpeg`, `audio/mp4`, `audio/x-m4a`, `audio/wav`, `audio/x-wav`, `audio/webm`, `audio/ogg`, `audio/flac`, `audio/aac`), video (`video/mp4`, `video/webm`, `video/quicktime`, `video/x-matroska`) up to 2 GiB; transcript files (`text/vtt`, `application/x-subrip`, `text/plain`, DOCX) up to 10 MiB. A known `(user_id, sha256)` returns the existing recording (200, no upload); otherwise a `pending_upload` row and the upload URL (201). The client computes the SHA-256 before init; the server verifies it in `media_prepare`.
+- **Complete** (`POST /recordings/{id}/complete`): the object must exist with the declared size (`head`), else 409 `upload_incomplete`. In one transaction: conditional `pending_upload → uploaded`, the upload's `source_items` row (`ingestion.register_upload`: kind `recording` or `transcript_file`, provider `upload`, no connection, external ID = recording ID, `content_hash` = the media SHA-256, `occurred_at` = the declared meeting start or the upload time, stage `normalized`), outbox `RecordingUploaded`. A repeat finds the row already past `pending_upload` and returns 202 with the current status.
+- **Cleanup:** a `pending_upload` row older than 24 h is deleted with its partial object by the hourly `media_sweep` (§15).
+
 ### 11.5 Webhooks (post-MVP; designed now)
 
 Webhooks are **synchronization signals**, never authoritative data:
@@ -1090,6 +1116,22 @@ Procrastinate is pinned exactly (`procrastinate==3.10.0`, slice 0.3; requires Py
 | `thread_summary_sweep` | retrieval | Every 5 min (`*/5 * * * *`, `schedule`) | lock `thread_summary_sweep`; one transaction per user | Claims a conversation by a conditional update of `summary_pending_through` to its latest relevant message and publishes `ThreadSummaryDue` only when the claim changed a row (the 10-minute debounce: the latest relevant message must be at least 10 minutes old) |
 | `retrieval.thread_summary` (`thread_summary`) | retrieval | `ThreadSummaryDue` (sweep or the user's request) | `natural_key`, queue `extract`; advisory lock `summary:{conversation}` in each transaction | Keyed by the last covered message: the result is stored only while `summary_pending_through` still equals the job's message; a stored summary for the same message is never recomputed |
 
+**Phase 4 jobs (decided 2026-10-03).** Media and AI parameters: `TECHNICAL_DESIGN.md` §16.1, `AI_PIPELINE.md` §5.10.
+
+| Task | Module | Trigger | Mode / lock | Idempotency |
+|---|---|---|---|---|
+| `meetings.media_prepare` (`media_prepare`) | meetings | `RecordingUploaded`; `RecordingStageDue` with stage `prepare` (retry endpoint, `media_sweep`) | `natural_key`, queue `media` (concurrency 1); every transaction takes `pg_advisory_xact_lock(hashtextextended('media:' \|\| recording_id, 0))`; ffprobe and ffmpeg run outside any transaction | Conditional claim `uploaded → preparing`; a recording past `preparing` is a no-op; transcript files are parsed here (no model call) |
+| `meetings.transcribe` (`transcribe`, AI-09) | meetings | `RecordingPrepared`; `RecordingStageDue` with stage `transcribe` | `natural_key`, queue `media`; same lock | Never runs when the recording already has a transcript version (`recordings.transcription_model` set): **re-transcription is never automatic**; `provider_file_ref` reused until it expires; the provider file is deleted after a successful transcription |
+| `retrieval.index_transcript` | retrieval | `TranscriptStored`, `SpeakerMappingChanged` | `natural_key`, queue `embed`; the index lock of Phase 2 on the recording's source item | As Phase 2 (chunk upsert by `(source_item_id, chunk_index)`, AI-04 only for changed chunks) |
+| `work.meeting_extract` (`meeting_extract`, AI-10) | work | `TranscriptStored`; `RecordingStageDue` with stage `extract` | `natural_key`, queue `ai_standard`; transaction 1 takes `pg_advisory_xact_lock(hashtextextended('mx:' \|\| recording_id \|\| ':' \|\| content_hash \|\| ':' \|\| prompt_version, 0))` | Extraction key `(source_item, transcript content_hash, meeting_extract, prompt_version)`; a succeeded row is reused without a call; attempt cap 4 |
+| `work.meeting_apply` | work | `ExtractionCompleted` with pipeline `meeting_extract` | consumption, queue `apply`, under the per-user merge lock | `apply_status` guard, deterministic evidence IDs, model dedupe keys (§10.1) |
+| `attention.prep_meeting`, `attention.prep_item`, `attention.prep_processed` (`prep_sections`) | attention | `MeetingChanged`; `WorkItemChanged`; `MeetingProcessed` | consumption, queue `events`; `pg_advisory_xact_lock(hashtextextended('prep:' \|\| meeting_id, 0))`; the store is conditional on the `prep_brief_version` read (the `prep:{meeting}:{version}` key) | Sections recomputed only for meetings starting within 24 h; stored only when the cache key changed (§18) |
+| `prep_sweep` | attention | Every 15 min (`*/15 * * * *`, `schedule`) | lock `prep_sweep`; one transaction per user | Meetings starting in the next 60 minutes get their sections (T−45 min); same key rule |
+| `retrieval.meeting_asks` (`meeting_asks`, AI-11) | retrieval | `MeetingAsksRequested` (the user opened the prep view, sections non-empty) | `natural_key`, queue `ai_standard`; `pg_advisory_xact_lock(hashtextextended('asks:' \|\| meeting_id \|\| ':' \|\| version, 0))` in each transaction | At most once per meeting version: stored only while `prep_brief_version` still equals the requested version; a version with asks or a recorded failure is never called again |
+| `media_sweep` | meetings | Every 5 min (`*/5 * * * *`, `schedule`) | lock `media_sweep`; one transaction per user | Deletes `pending_upload` rows older than 24 h with their partial objects; publishes `RecordingStageDue` for recordings whose `next_attempt_at` has passed (retry backoff, budget deferral); purges raw media 7 days after `processed_at` (ready), 7 days after rejection and 30 days after a failure (`raw_purged_at`); deletes provider files older than 48 h that are still referenced |
+
+Media stages use the media retry class of §14.3 (base 60 s, at most 4 runs per stage) without Procrastinate's handler retries: a failed run below the cap records `stage_attempts + 1`, the error code and `next_attempt_at = now + min(60 s · 2^(n−1), 1 h)` and returns; `media_sweep` publishes `RecordingStageDue` when that time has passed; the 4th failed run marks the recording `failed` at the stage (the user may retry, `POST /recordings/{id}/retry`). A budget refusal (AI-09 or AI-10 at the hard cap, `AI_COST_MODEL.md` §7.2) is not an attempt: the recording keeps its status with `next_attempt_at` = the window reset. AI-10 failures follow the extraction attempt cap instead (4 model calls per key, `AI_PIPELINE.md` §7): a retryable failure below the cap raises and is retried by the handler strategy, `failed_permanent` marks the recording `failed` at stage `extract`.
+
 Per-user fairness: at most 4 concurrent `extract` jobs per user (checked at job start against running jobs for that user; excess re-deferred with a short delay), so one large import cannot starve other users.
 
 ---
@@ -1265,6 +1307,24 @@ Why cursor pagination: the collections here (changes, events, needs-response, it
 | `GET /api/v1/conversations/{id}` | Adds `gist_timeline` (date, sender, AI-01 gist; labelled AI-derived) and, when present, `summary` with its provenance (`model`, `prompt_version`, `derived_at`, `covered_source_ids`, `through_message_id`, `stale` when newer relevant messages exist) |
 | `POST /api/v1/conversations/{id}/reply-guidance` | Body `{instructions?}` (≤ 500 characters, user-authored intent such as "decline politely"). **`Idempotency-Key` required**; rate limit 10/min. `text/event-stream`: `sources` `{citations, coverage}`, then `final` `{guidance}` or `error`. `guidance` = sections `context`, `previous_agreement`, `current_status` (verified claims with kinds and citations), `draft` (a `recommendation`, "copy only"), `draft_warnings`, `tier` (`T2`, `abstain`, `degraded`), `notice`, provenance. The draft is never sent and never written to Gmail: no send, draft or calendar scope exists (`TECHNICAL_DESIGN.md` §10.2). The response is stored only as the idempotency response (24 h); a replay returns it with `Idempotent-Replay: true` |
 | `PATCH /api/v1/work-items/{id}` | Adds `priority_override` (`1`, `-1`, `0` or null). It is applied by `work.set_item_priority_override` (USER-AUTHORED column, `version` + 1, `context_events` and `feedback_events`), not by the fold; the same transaction records priority pairs (`TECHNICAL_DESIGN.md` §12.8). `PATCH /conversations/{id}` records pairs the same way |
+
+### 16.9 Phase 4 route details (decided 2026-10-03)
+
+| Route | Detail |
+|---|---|
+| `POST /api/v1/recordings` | Upload init (§11.4). **`Idempotency-Key` required**; rate limit **10 per hour** per user (429 + `Retry-After`). Body `{mime, bytes, sha256 (64 hex), title? (≤ 200), occurred_at?, meeting_id?}`. 201 with `Location` and `{recording, upload: {url, method: "PUT", headers, expires_at}}`; 200 with `{recording, upload: null, duplicate: true}` when the same media (`sha256`) was uploaded before. 422 for a type or size outside the limits; 404 for an unknown `meeting_id` |
+| `PUT /api/v1/uploads/{token}` | Local storage adapter only (§11.4): the body is the file. Authorized by the signed token, not the session; 201 on success; 403 bad or expired token; 413 above the signed size; 415 wrong `Content-Type`. Not in the production route set |
+| `POST /api/v1/recordings/{id}/complete` | 202 with the status URL; conditional `pending_upload → uploaded` (repeat = no-op, same 202); 409 `upload_incomplete` when the object is missing or its size differs |
+| `GET /api/v1/recordings/{id}` | Status by stage: `status` (`pending_upload`, `uploaded`, `preparing`, `transcribing`, `transcribed`, `extracting`, `ready`, `failed`, `rejected`), `failed_stage` (`prepare`, `transcribe`, `extract`), `error_code`, `duration_s`, `meeting_id`, `transcription_model`, `stage_attempts`, `next_attempt_at`, `raw_purged_at`. No transcript text |
+| `GET /api/v1/recordings?cursor=` | The user's recordings, newest first |
+| `POST /api/v1/recordings/{id}/retry` | Only for `status = failed`: resets `stage_attempts`, sets the status to the failed stage's start (`uploaded`, `transcribing` or `transcribed`) and publishes `RecordingStageDue`; 202. 409 `not_failed` otherwise. A `rejected` recording (limits, checksum, no audio) cannot be retried |
+| `PUT /api/v1/recordings/{id}/meeting` | Body `{meeting_id}` (a calendar meeting) or `{meeting_id: null}`. Allowed until meeting extraction has started (`status` before `extracting`), else 409 `already_extracted`; 409 `meeting_has_recording` when the meeting already has another recording (one recording per meeting, so speaker labels never mix). 200 with the recording |
+| `GET /api/v1/recordings/meeting-suggestions?occurred_at=` | The upload dialog's suggestions: calendar meetings overlapping `occurred_at` ± 3 h, else the 10 most recent meetings of the last 7 days; meetings that already have a recording are left out. Deterministic |
+| `GET /api/v1/meetings/{id}` | The meeting page and the missed-meeting view (PRD §22, §25), all deterministic reads: calendar fields (SOURCE), `recording` status, `summary` (AI-10 summary, topics and concerns with provenance and the label "AI summary"), `decisions` and `open_questions` (from this meeting, with evidence timestamps), `items` grouped `yours` (`my_commitment`, `my_task`), `theirs` (`waiting_for`, `delegated`), `others` (`observed`) and `unresolved` (unmapped speakers, "confirm the speaker"), `speakers` (labels with mapped person, origin, confidence and status; proposals to confirm), `what_changed` (§9.6: net changes since the previous related meeting) and `previous_meeting`. Each AI-derived value carries `origin`, `verification_status` and provenance |
+| `PUT /api/v1/meetings/{id}/speakers` | Body `{mappings: [{label, person_id \| null}], base_version?}`. The user's mapping, authority 5: `meeting_participants` rows with `mapping_origin = user` (a `null` person removes the label from every row: "none of these"), a `feedback_events` row per label, `context_events` (entity `meeting`, actor user) and `SpeakerMappingChanged`; items whose statements came from a remapped label are re-pointed by `work.remap_speaker_items` (owner, requester, counterparty and direction recomputed with the §5.5 mapping, written as `actor = user` events). User mappings survive re-extraction: apply reads them before any AI proposal. `If-Match` on the meeting version; 200 with the speakers |
+| `GET /api/v1/meetings/{id}/prep` | Prep view: the deterministic sections computed at read time (purpose, what changed since the last related meeting, open items both directions, unresolved questions, deadlines before the meeting), their cache key and version, and `asks` when asks were generated for this key (`status`: `not_requested`, `pending`, `ready`, `failed`, `skipped`; `skipped` at the soft budget cap). No model call and no write |
+| `POST /api/v1/meetings/{id}/prep/asks` | The web app calls this when the user opens the prep view and the sections are non-empty: stores the sections for the current key (through `meetings.store_prep_sections`) and publishes `MeetingAsksRequested` once per version; 202, or 200 with the stored asks. 409 `nothing_to_ask` when the sections are empty (no AI-11 call, `AI_PIPELINE.md` §9) |
+| `POST /api/v1/chat/sessions` | `{scope: {kind: "meeting", meeting_id}}` creates a meeting-scoped session (`CONTEXT_ARCHITECTURE.md` §13); unchanged route |
 
 ### 16.6 Inbound rate limits
 
@@ -1644,6 +1704,87 @@ Deletion order additions (§13.3): account deletion runs `chat` → `attention` 
 
 ---
 
+### 17.7 Phase 4 schema (decided 2026-10-03)
+
+One revision per concern; every new table gets ENABLE + FORCE RLS through `user_isolation_ddl` and the default DML grants (§7.6, "Phase 4 tables").
+
+| Revision | Slice | Objects |
+|---|---|---|
+| `0024_recordings` | 4.1 | `recordings` |
+| `0025_transcript_segments` | 4.2 | `transcript_segments` |
+| `0026_meeting_extraction` | 4.3 | `meetings.origin` and `summary_*` provenance columns; `meeting_participants.speaker_labels` and `mapping_*`; `decisions.meeting_id` |
+| `0027_transcript_chunks` | 4.2 | `chunks.start_ms`, `chunks.end_ms` |
+
+```sql
+CREATE TABLE recordings (
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id),
+  kind text NOT NULL CHECK (kind IN ('media','transcript_file')),
+  mime text NOT NULL, bytes bigint NOT NULL CHECK (bytes > 0), sha256 bytea NOT NULL,
+  title text NULL, occurred_at timestamptz NULL,             -- user-declared (unlinked uploads)
+  storage_key text NOT NULL, audio_storage_key text NULL,    -- original object; prepared mono Opus audio
+  source_item_id uuid NULL REFERENCES source_items(id),      -- set at complete (ingestion.register_upload)
+  meeting_id uuid NULL REFERENCES meetings(id),              -- calendar link or the upload meeting
+  status text NOT NULL DEFAULT 'pending_upload' CHECK (status IN ('pending_upload','uploaded','preparing',
+        'transcribing','transcribed','extracting','ready','failed','rejected')),
+  failed_stage text NULL CHECK (failed_stage IN ('prepare','transcribe','extract')),
+  error_code text NULL, stage_attempts smallint NOT NULL DEFAULT 0, next_attempt_at timestamptz NULL,
+  duration_s real NULL,                                      -- probed (media) or last segment end (files)
+  transcription_model text NULL,                             -- current transcript version (key with recording_id)
+  transcript_hash bytea NULL,                                -- content_hash of that version (AI-10 extraction key)
+  provider_file_ref jsonb NULL, provider_file_expires_at timestamptz NULL,   -- Gemini Files API reuse
+  upload_expires_at timestamptz NOT NULL, processed_at timestamptz NULL, raw_purged_at timestamptz NULL,
+  version int NOT NULL DEFAULT 1,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX ux_recordings_sha ON recordings (user_id, sha256);
+CREATE UNIQUE INDEX ux_recordings_meeting ON recordings (meeting_id) WHERE meeting_id IS NOT NULL;
+CREATE INDEX ix_recordings_user_time ON recordings (user_id, created_at DESC, id);
+CREATE INDEX ix_recordings_due ON recordings (next_attempt_at) WHERE next_attempt_at IS NOT NULL;
+CREATE INDEX ix_recordings_purge ON recordings (updated_at) WHERE raw_purged_at IS NULL
+  AND status IN ('ready','failed','rejected');
+
+CREATE TABLE transcript_segments (
+  id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id),
+  recording_id uuid NOT NULL REFERENCES recordings(id),
+  transcription_model text NOT NULL,                         -- AI-09 model ID, or file:vtt|srt|docx|txt
+  seq int NOT NULL, start_ms int NULL, end_ms int NULL,      -- NULL for files without timing (TXT, DOCX)
+  speaker_label text NULL, text text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (recording_id, transcription_model, seq));
+
+ALTER TABLE meetings
+  ADD COLUMN origin text NOT NULL DEFAULT 'calendar' CHECK (origin IN ('calendar','upload')),
+  ADD COLUMN summary_extraction_id uuid NULL REFERENCES extractions(id),
+  ADD COLUMN summary_method text NULL CHECK (summary_method IN ('llm')),
+  ADD COLUMN summary_model text NULL, ADD COLUMN summary_prompt_version text NULL,
+  ADD COLUMN summary_derived_at timestamptz NULL;
+-- summary (0010) holds {text, topics[], concerns[{text, evidence_id}]}; processing_status (0010) is
+-- none | processing | ready | failed; prep_brief (0010) holds {key, computed_at, sections, asks}
+
+ALTER TABLE meeting_participants
+  ADD COLUMN speaker_labels text[] NOT NULL DEFAULT '{}',   -- diarization labels mapped to this person
+  ADD COLUMN mapping_status text NULL CHECK (mapping_status IN ('proposed','applied')),
+  ADD COLUMN mapping_origin text NULL CHECK (mapping_origin IN ('deterministic','ai','user')),
+  ADD COLUMN mapping_method text NULL, ADD COLUMN mapping_confidence real NULL,
+  ADD COLUMN mapping_extraction_id uuid NULL REFERENCES extractions(id),
+  ADD COLUMN mapping_model text NULL, ADD COLUMN mapping_derived_at timestamptz NULL,
+  ADD COLUMN mapping_confirmed_at timestamptz NULL;
+
+ALTER TABLE decisions ADD COLUMN meeting_id uuid NULL REFERENCES meetings(id);
+CREATE INDEX ix_decisions_meeting ON decisions (user_id, meeting_id) WHERE meeting_id IS NOT NULL;
+
+ALTER TABLE chunks ADD COLUMN start_ms int NULL, ADD COLUMN end_ms int NULL;   -- transcript windows
+```
+
+Notes:
+- **Transcript versioning key** = `(recording_id, transcription_model)`. A new version is written in one transaction (delete that key's segments, insert the new ones, set `recordings.transcription_model` and `transcript_hash`); other versions stay for their evidence. `transcript_hash` = SHA-256 over the canonical JSON of `[seq, start_ms, end_ms, speaker_label, text]` rows; it is the AI-10 extraction `content_hash`.
+- **Speaker mapping** lives on `meeting_participants` (`TECHNICAL_DESIGN.md` §9.1 listed `transcript_segments.speaker_person_id`; it is not built, because a mapping is per meeting and the segment's person is found through `speaker_labels`). A label belongs to at most one participant row of a meeting (enforced by `meetings` under the meeting row lock); a person may carry several labels (the 60-minute window fallback labels speakers per window). A participant row may exist only because of a mapping (`origin = ai` or `user`, A13). `applied` mappings resolve speakers; `proposed` ones (AI below 0.9) wait for the user. When the user answers "none of these" for a label (`person_id: null`), the label is removed from every row and stays unresolved; a later re-apply may propose it again, but a proposal never applies below 0.9. An AI proposal for a person who already has an `applied` mapping is not stored as a proposal: its label stays unmapped until the user maps it. User mappings (`mapping_origin = user`) are never replaced by deterministic or AI mappings.
+- **Upload meetings.** A recording without a calendar link gets a meeting row with `origin = upload` when meeting extraction starts (title = the declared title, start = the declared `occurred_at` or the upload time, end = start + duration; `source_item_id` = the recording's source item), so decisions, chunks and prep have a meeting to point at.
+- **Not built:** `transcript_segments.speaker_confidence` (the mapping row carries the confidence).
+
+Deletion order additions (§13.3): account deletion first deletes every object of the user's recordings (original and prepared audio) and any provider file still referenced, then purges `meetings` in this order: transcript segments → recordings → participants → meetings (after `work`, whose decisions reference meetings, and after `retrieval`, whose chunks reference them); the upload source items go with `ingestion`. Retention (`media_sweep`) deletes the objects and provider files of processed recordings after 7 days and sets `raw_purged_at`; rows, transcripts and facts are kept (`TECHNICAL_DESIGN.md` §9.3). Source purge (disconnect) does not touch uploads, which belong to no connection.
+
+---
+
 ## 18. Caching
 
 | Cache | Key | Invalidation |
@@ -1656,6 +1797,8 @@ Deletion order additions (§13.3): account deletion runs `chat` → `attention` 
 | Per-user priority multipliers | Read per recompute from `user_priority_weights` | Nightly fit |
 | Item `ETag` | `version` | Natural |
 | Gemini implicit caching | Stable prompt prefix | Provider-managed |
+
+**Prep cache key and invalidation (Phase 4, decided 2026-10-03).** The key is the SHA-256 of the canonical JSON of: the meeting ID and `version`, the IDs of its prior related meetings, and the sorted `(type, id, version)` of every entity the sections include (work items, decisions); for "what changed" also the newest included `context_events` ID. `meetings.prep_brief` = `{key, computed_at, sections, asks}`; `meetings.prep_brief_version` increments each time a different key is stored. Recomputation is deterministic (`attention`); a store is a conditional update on the version read, so concurrent recomputations keep one result. Asks belong to one version: `asks = {version, status, items, provenance}`; a new version shows the new sections at once and regenerates asks only on the next open (AI-11 at most once per version). Decision rows bump `version` when they are resolved or superseded, so the key also changes then.
 
 **Not in the MVP** (complexity audit, `ARCHITECTURE_REVIEW.md` §E): rendered-card cache, query-embedding cache, dashboard ETag/`context_version` counter, chat packet reuse, Redis. Dashboard and list queries are indexed SQL over small per-user sets.
 
