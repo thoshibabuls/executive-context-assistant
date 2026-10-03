@@ -164,6 +164,10 @@ def extract_expression(question: str) -> tuple[str | None, bool]:
     m = re.search(r"\b(?:in the |over the )?(?:last|past) (\w+) (?:days?|weeks?)\b", q)
     if m and _number(m.group(1)) is not None:
         return m.group(0).strip(), False
+    # "in the last week", "over the past week", "the past week": rolling 7 x 24 h. Only a bare
+    # "last week" is the previous Monday-Sunday (CONTEXT_ARCHITECTURE.md §7.1).
+    if re.search(r"\b(?:(?:in|over|during) the (?:last|past)|the past|past) week\b", q):
+        return "last 7 days", False
     for phrase, expr in (
         ("yesterday", "yesterday"),
         ("today", "today"),
