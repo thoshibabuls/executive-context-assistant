@@ -33,6 +33,7 @@ from eca.intelligence import (
     MEETING_PROMPT_VERSION,
     ExtractionRecord,
     MeetingExtraction,
+    MeetingSignal,
     SegmentEvidence,
     get_extraction,
     mark_applied,
@@ -55,7 +56,8 @@ from eca.work.apply import MERGE_LOCK_SQL, REPORTED, ApplyReport
 from eca.work.candidates import OpenItem, match_items, matchable_items
 from eca.work.dates import DueResolution, guess_disagrees, resolve_due
 from eca.work.mapping import authority, map_statement
-from eca.work.models import decisions_table, item_evidence_table
+from eca.work.models import decisions_table, item_evidence_table, work_items_table
+from eca.work.queries import get_evidence
 from eca.work.service import (
     Relink,
     add_evidence,
@@ -444,6 +446,52 @@ async def _statements(uow: UnitOfWork, c: _Context, report: ApplyReport) -> None
         )
 
 
+def _signal_event(
+    sig: MeetingSignal,
+    quote: str,
+    occurred: datetime.datetime,
+    ev_id: UUID,
+    *,
+    reference: datetime.datetime,
+    tz: str,
+) -> tuple[str, dict[str, Any]]:
+    """(event type, fields) of a status signal on an item (shared by apply and speaker re-pointing)."""
+    sets: dict[str, Any] = {}
+    event_type = "status_signal"
+    if sig.signal == "new_deadline":
+        text = sig.new_due_text if sig.new_due_text and sig.new_due_text in quote else None
+        sets = _due_fields(resolve_due(text, reference=reference, timezone=tz))
+        event_type = "due_changed"
+    elif sig.signal == "accepted":
+        sets = {"type": "commitment", "statement_kind": "acceptance", "commitment_strength": "explicit"}
+        event_type = "accepted"
+    elif sig.signal in REPORTED:
+        sets = {
+            "reported_status": REPORTED[sig.signal],
+            "reported_status_at": occurred,
+            "reported_status_evidence_id": ev_id,
+        }
+        if sig.signal == "completed_claim":
+            event_type = "completed_claim"
+        if sig.signal == "cancelled":
+            sets["lifecycle_status"] = "cancelled"  # the fold turns this into a prompt, never a fact
+    return event_type, sets
+
+
+def signal_authority(speaker_id: UUID | None, owner_id: UUID | None) -> int:
+    """CONTEXT_ARCHITECTURE.md §8.2: 4 the owner, 3 another mapped participant, 2 unmapped speaker."""
+    if speaker_id is None:
+        return 2
+    return 4 if speaker_id == owner_id else 3
+
+
+async def _owner_of(uow: UnitOfWork, item_id: UUID) -> UUID | None:
+    t = work_items_table
+    return (
+        await uow.session.execute(select(t.c.owner_person_id).where(t.c.id == item_id))
+    ).scalar_one_or_none()
+
+
 async def _signals(uow: UnitOfWork, c: _Context, report: ApplyReport, decided: set[str]) -> None:
     for n, sig in enumerate(c.out.status_signals):
         g = ground_segment(sig.evidence, c.segments, duration_ms=c.duration_ms)
@@ -501,31 +549,15 @@ async def _signals(uow: UnitOfWork, c: _Context, report: ApplyReport, decided: s
             end_ms=g.end_ms,
         )
         speaker = c.by_label.get(sig.speaker)
-        sets: dict[str, Any] = {}
-        event_type = "status_signal"
-        if sig.signal == "new_deadline":
-            text = sig.new_due_text if sig.new_due_text and sig.new_due_text in g.quote else None
-            sets = _due_fields(resolve_due(text, reference=c.meeting.starts_at, timezone=c.tz))
-            event_type = "due_changed"
-        elif sig.signal == "accepted":
-            sets = {"type": "commitment", "statement_kind": "acceptance", "commitment_strength": "explicit"}
-            event_type = "accepted"
-        elif sig.signal in REPORTED:
-            sets = {
-                "reported_status": REPORTED[sig.signal],
-                "reported_status_at": occurred,
-                "reported_status_evidence_id": ev_id,
-            }
-            if sig.signal == "completed_claim":
-                event_type = "completed_claim"
-            if sig.signal == "cancelled":
-                sets["lifecycle_status"] = "cancelled"  # the fold turns this into a prompt, never a fact
+        event_type, sets = _signal_event(
+            sig, g.quote, occurred, ev_id, reference=c.meeting.starts_at, tz=c.tz
+        )
         await append_event(
             uow,
             item_id=target_id,
             event_type=event_type,
             actor="model",
-            authority=3 if speaker is not None else 2,
+            authority=signal_authority(speaker.id if speaker else None, await _owner_of(uow, target_id)),
             materiality=3 if event_type in ("due_changed", "completed_claim") else 1,
             occurred_at=occurred,
             dedupe_key=model_dedupe_key(c.ext.id, idx, event_type),
@@ -933,4 +965,66 @@ async def remap_speaker_items(
                     payload={"set": _json(sets), "speaker_label": st.speaker, "meeting_id": str(record.id)},
                 )
                 touched.append(result.item_id)
+        touched += await _remap_signals(uow, ext, out, changed, by_label)
     return sorted(set(touched))
+
+
+async def _remap_signals(
+    uow: UnitOfWork,
+    ext: ExtractionRecord,
+    out: MeetingExtraction,
+    changed: set[str],
+    by_label: dict[str, PersonRef],
+) -> list[UUID]:
+    """Status signals of a remapped label: the model event again, with the new speaker and the
+    §8.2 authority (still a model claim, never authority 5; BACKEND_DESIGN.md §16.9)."""
+    ie = item_evidence_table
+    touched: list[UUID] = []
+    tz = (await get_user_settings(uow)).timezone
+    for n, sig in enumerate(out.status_signals):
+        if sig.speaker not in changed:
+            continue
+        target_id = _candidate(ext, sig.candidate_id, "work_item")
+        if target_id is None:
+            continue
+        idx = SIGNAL_INDEX + n
+        ev_id = evidence_id_for(ext.id, idx)
+        linked = (
+            await uow.session.execute(
+                select(ie.c.item_id).where(
+                    ie.c.user_id == uow.user_id,
+                    ie.c.evidence_id == ev_id,
+                    ie.c.item_type == "work_item",
+                )
+            )
+        ).scalar_one_or_none()
+        if linked is None:
+            continue
+        evidence = await get_evidence(uow, ev_id)
+        occurred = evidence.occurred_at or datetime.datetime.now(datetime.UTC)
+        event_type, sets = _signal_event(sig, evidence.quote, occurred, ev_id, reference=occurred, tz=tz)
+        speaker = by_label.get(sig.speaker)
+        result = await append_event(
+            uow,
+            item_id=linked,
+            event_type=event_type,
+            actor="model",
+            authority=signal_authority(speaker.id if speaker else None, await _owner_of(uow, linked)),
+            materiality=3 if event_type in ("due_changed", "completed_claim") else 1,
+            occurred_at=occurred,
+            dedupe_key=model_dedupe_key(
+                ext.id, idx, f"{event_type}:speaker:{speaker.id if speaker else 'none'}"
+            ),
+            payload={
+                "set": _json(sets),
+                "by_person": str(speaker.id) if speaker else None,
+                "speaker_label": sig.speaker,
+                "signal": sig.signal,
+                "confidence": sig.confidence,
+                "speaker_remapped": True,
+            },
+            evidence_id=ev_id,
+            extraction_id=ext.id,
+        )
+        touched.append(result.item_id)
+    return touched
