@@ -79,6 +79,12 @@ class PermissionDenied(DomainError):
     code = "permission_denied"
 
 
+class Unauthenticated(PermissionDenied):
+    """No valid session (missing, expired or revoked): HTTP 401 (BACKEND_DESIGN.md §16)."""
+
+    code = "unauthenticated"
+
+
 class RateLimited(DomainError):
     code = "rate_limited"
 

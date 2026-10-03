@@ -15,8 +15,8 @@ from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from eca import attention
+from eca.api.auth import settings_dep
 from eca.api.common import Cursors, Factory, User, as_json, limit_of, now, page_body
-from eca.platform.config import get_settings
 from eca.platform.errors import NotFound
 
 router = APIRouter(prefix="/api/v1")
@@ -131,9 +131,9 @@ async def read_notifications(body: ReadBody, user: User, factory: Factory) -> di
 
 
 @router.get("/push-subscriptions/key")
-async def push_key() -> dict[str, Any]:
+async def push_key(request: Request) -> dict[str, Any]:
     """The VAPID public key for ``PushManager.subscribe``; 404 when Web Push is not configured."""
-    keys = attention.VapidKeys.from_settings(get_settings())
+    keys = attention.VapidKeys.from_settings(settings_dep(request))
     if keys is None:
         raise NotFound("push_not_configured")
     return {"public_key": keys.public_key}
@@ -152,7 +152,7 @@ class PushSubscriptionBody(BaseModel):
 async def create_push_subscription(
     body: PushSubscriptionBody, request: Request, user: User, factory: Factory
 ) -> dict[str, Any]:
-    if attention.VapidKeys.from_settings(get_settings()) is None:
+    if attention.VapidKeys.from_settings(settings_dep(request)) is None:
         raise NotFound("push_not_configured")
     expires = (
         datetime.datetime.fromtimestamp(body.expirationTime / 1000, datetime.UTC)

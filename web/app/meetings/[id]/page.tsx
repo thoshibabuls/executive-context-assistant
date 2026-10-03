@@ -131,7 +131,7 @@ export default function MeetingDetailPage({ params }: { params: Promise<{ id: st
     try {
       setPage(unwrap<MeetingPage>(await api.GET("/api/v1/meetings/{meeting_id}", { params: { path: { meeting_id: id } } })));
     } catch (e) {
-      if (e instanceof ApiError && e.status === 403) {
+      if (e instanceof ApiError && e.status === 401) {
         window.location.href = "/api/v1/auth/google/login";
         return;
       }

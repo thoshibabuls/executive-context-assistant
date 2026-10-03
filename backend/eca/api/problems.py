@@ -32,6 +32,8 @@ def status_for(error: errors.DomainError) -> tuple[int, str]:
         return 409, error.code
     if isinstance(error, errors.PreconditionFailed):
         return (412, error.code) if error.reason == "version" else (409, "scope_required")
+    if isinstance(error, errors.Unauthenticated):
+        return 401, error.code
     if isinstance(error, errors.PermissionDenied):
         return 403, error.code
     if isinstance(error, errors.RateLimited):  # includes BudgetExceeded
@@ -83,6 +85,13 @@ async def _domain_error_handler(request: Request, exc: Exception) -> JSONRespons
         return problem_response(request, status=500, code="internal_error", title="Internal error")
     extra: dict[str, Any] = {}
     headers: dict[str, str] | None = None
+    reason = exc.details.get("reason")
+    if isinstance(reason, str) and reason:
+        # A specific conflict is its own code (BACKEND_DESIGN.md §16.9: 409 ``upload_incomplete``,
+        # 409 ``nothing_to_ask``); every problem keeps the reason for clients.
+        extra["reason"] = reason
+        if isinstance(exc, errors.Conflict):
+            code = reason
     if isinstance(exc, errors.ValidationFailed):
         extra["errors"] = [{"field": e.field, "message": e.message} for e in exc.errors]
     if isinstance(exc, errors.Conflict):

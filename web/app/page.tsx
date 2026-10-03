@@ -55,7 +55,7 @@ export default function TodayPage() {
     try {
       setToday(unwrap<Today>(await api.GET("/api/v1/today")));
     } catch (e) {
-      if (e instanceof ApiError && e.status === 403) {
+      if (e instanceof ApiError && e.status === 401) {
         window.location.href = "/api/v1/auth/google/login";
         return;
       }

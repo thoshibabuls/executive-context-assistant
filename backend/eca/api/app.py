@@ -94,6 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.rate_limiter = RateLimiter()
         app.state.ai_client = _ai_client(settings, app.state.uow_factory)
         app.state.storage = _storage(settings)
+        app.state.settings = settings
         try:
             yield
         finally:

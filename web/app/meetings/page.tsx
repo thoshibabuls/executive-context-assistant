@@ -80,7 +80,7 @@ export default function MeetingsPage() {
       const list = unwrap<Page<Meeting>>(await api.GET("/api/v1/meetings", { params: { query: { from, to } } }));
       setMeetings(list.items);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 403) {
+      if (e instanceof ApiError && e.status === 401) {
         window.location.href = "/api/v1/auth/google/login";
         return;
       }

@@ -41,7 +41,7 @@ from eca.identity import (
 from eca.people import create_self_person
 from eca.platform.audit import record_audit
 from eca.platform.config import Settings, get_settings
-from eca.platform.errors import Gone, PermissionDenied, ValidationFailed
+from eca.platform.errors import Gone, PermissionDenied, Unauthenticated, ValidationFailed
 from eca.platform.ids import uuid7
 from eca.platform.uow import UnitOfWorkFactory
 
@@ -71,8 +71,10 @@ def jwks(request: Request) -> JwksCache:
     return cache
 
 
-def settings_dep() -> Settings:
-    return get_settings()
+def settings_dep(request: Request) -> Settings:
+    """The settings the app was created with (``create_app(settings)``), else the environment's."""
+    settings = getattr(request.app.state, "settings", None)
+    return settings if isinstance(settings, Settings) else get_settings()
 
 
 @dataclass(frozen=True)
@@ -89,15 +91,15 @@ async def current_user(
 ) -> CurrentUser:
     token = request.cookies.get(settings.session_cookie_name)
     if not token:
-        raise PermissionDenied("not signed in")
+        raise Unauthenticated("not signed in")
     async with factory(user_id=None) as uow:
         user_id = await session_user_id(uow, token)
     if user_id is None:
-        raise PermissionDenied("session expired or revoked")
+        raise Unauthenticated("session expired or revoked")
     async with factory(user_id=user_id) as uow:
         info = await load_session(uow, token, now=_now())
     if info is None:
-        raise PermissionDenied("session expired or revoked")
+        raise Unauthenticated("session expired or revoked")
     if info.user_status != "active":
         raise Gone("this account is being deleted")
     if request.method in UNSAFE:

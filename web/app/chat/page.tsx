@@ -95,7 +95,7 @@ export default function ChatPage() {
       setSession(full);
       setMessages(full.messages ?? []);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 403) {
+      if (e instanceof ApiError && e.status === 401) {
         window.location.href = "/api/v1/auth/google/login";
         return;
       }

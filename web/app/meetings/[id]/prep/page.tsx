@@ -93,7 +93,7 @@ export default function PrepPage({ params }: { params: Promise<{ id: string }> }
         if (requested.data) setPrep(requested.data as unknown as Prep);
       }
     } catch (e) {
-      if (e instanceof ApiError && e.status === 403) {
+      if (e instanceof ApiError && e.status === 401) {
         window.location.href = "/api/v1/auth/google/login";
         return;
       }
