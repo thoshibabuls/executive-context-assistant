@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime
 import re
 from dataclasses import replace
+from typing import Any
 from uuid import UUID
 
 from eca import meetings, work
@@ -121,6 +122,61 @@ async def _target_for_prep(ctx: Ctx) -> meetings.MeetingDetail | None:
     return soon[0] if soon else None
 
 
+_OPEN = frozenset({"open", "in_progress"})
+_CHANGE_WORDS = {
+    "new": "new",
+    "status": "status changed",
+    "deadline": "deadline changed",
+    "owner": "owner changed",
+    "conflict": "conflicting information",
+    "decided": "decided",
+    "resolved": "resolved",
+    "superseded": "superseded",
+}
+
+
+def _section_ids(sections: dict[str, Any], names: tuple[str, ...]) -> list[UUID]:
+    out: list[UUID] = []
+    for name in names:
+        for entry in sections.get(name) or []:
+            try:
+                value = UUID(str(entry.get("id")))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if value not in out:
+                out.append(value)
+    return out
+
+
+def _change_cards(entries: list[dict[str, Any]], ctx: Ctx) -> list[PacketItem]:
+    """The prep section "what changed since the previous meeting" (computed, no AI)."""
+    out = []
+    for n, entry in enumerate(entries[:10]):
+        try:
+            entity_id = UUID(str(entry.get("entity_id")))
+        except (TypeError, ValueError):
+            continue
+        recorded = entry.get("recorded_at")
+        when = fmt_date(datetime.datetime.fromisoformat(recorded), ctx.tz) if recorded else "recently"
+        what = _CHANGE_WORDS.get(str(entry.get("kind")), str(entry.get("kind")))
+        line = f"{when}: {what} — {delimit(entry.get('title') or 'untitled')}"
+        out.append(
+            PacketItem(
+                key=f"change:{entity_id}:{n}",
+                kind="event",
+                section="timeline",
+                priority="anchor_timeline",
+                text=f"[changed since the previous meeting] {line}",
+                line=line,
+                data_class="computed",
+                claim_kind="source",
+                authority=1,
+                entity_id=entity_id,
+            )
+        )
+    return out
+
+
 async def meeting_prep(ctx: Ctx) -> Retrieved:
     m = await _target_for_prep(ctx)
     if m is None:
@@ -128,19 +184,38 @@ async def meeting_prep(ctx: Ctx) -> Retrieved:
         return Retrieved([], False)
     items: list[PacketItem] = [await _meeting_card(ctx, m)]
     attendees = set(m.attendee_ids) - {ctx.self_id}
-    involved = [
-        i
-        for i in await work.open_items(ctx.uow)
-        if {p for p in (i.owner_person_id, i.counterparty_person_id, i.requester_person_id) if p} & attendees
-    ]
-    involved.sort(key=lambda i: (i.due_at or datetime.datetime.max.replace(tzinfo=datetime.UTC), str(i.id)))
+    stored = await meetings.get_prep(ctx.uow, m.id)
+    changed: list[PacketItem] = []
+    if stored is not None and stored.sections:
+        # The stored prep sections (the prep view's content); each entry re-read for current state.
+        sections = stored.sections
+        listed = _section_ids(sections, ("open_items_mine", "open_items_theirs", "deadlines"))
+        by_id = {v.id: v for v in await work.items_by_ids(ctx.uow, listed)}
+        involved = [by_id[i] for i in listed if i in by_id and by_id[i].lifecycle_status in _OPEN]
+        question_ids = _section_ids(sections, ("unresolved_questions",))
+        open_questions = await work.decisions_by_ids(ctx.uow, question_ids)
+        changed = _change_cards(sections.get("what_changed") or [], ctx)
+    else:
+        involved = [
+            i
+            for i in await work.open_items(ctx.uow)
+            if {p for p in (i.owner_person_id, i.counterparty_person_id, i.requester_person_id) if p}
+            & attendees
+        ]
+        involved.sort(
+            key=lambda i: (i.due_at or datetime.datetime.max.replace(tzinfo=datetime.UTC), str(i.id))
+        )
+        open_questions = []
     items += await _item_cards(ctx, involved[:15], section="anchors", priority="anchor")
     items += await _quote_cards(ctx, "work_item", [i.id for i in involved[:8]], per_item=1)
+    items += changed
     prior = await meetings.prior_meetings(ctx.uow, m.id, limit=2)
-    decisions: list[work.DecisionView] = []
+    decisions: list[work.DecisionView] = list(open_questions)
+    seen = {d.id for d in decisions}
     for p in prior:
         mw = await work.meeting_work(ctx.uow, meeting_id=p.id, source_item_id=None)
-        decisions += mw.open_questions + mw.decisions
+        decisions += [d for d in mw.open_questions + mw.decisions if d.id not in seen]
+        seen |= {d.id for d in decisions}
     items += await _decision_cards(ctx, decisions, anchor=True)
     if prior:
         ctx.notes.append(
@@ -162,7 +237,7 @@ async def meeting_prep(ctx: Ctx) -> Retrieved:
         )
         items += [cards.chunk_card(h, ctx.tz, score=h.rrf) for h in hits[:TOPIC_CHUNKS]]
     window = TimeWindow(ctx.now, m.starts_at, f"before {m.title or 'the meeting'}", "default")
-    return Retrieved(items, bool(involved or decisions), window=window)
+    return Retrieved(items, bool(involved or decisions or changed), window=window)
 
 
 async def _cross_anchor(ctx: Ctx) -> meetings.MeetingDetail | None:

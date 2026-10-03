@@ -25,9 +25,9 @@ from sqlalchemy import text
 
 from eca.api.app import create_app
 from eca.connections import create_connection
-from eca.connectors import ConnectorRegistry, FakeAccounts, NormalizedMessage
+from eca.connectors import ConnectorRegistry, FakeAccounts, NormalizedEvent, NormalizedMessage
 from eca.identity import create_session, create_user
-from eca.ingestion import sync_mail
+from eca.ingestion import sync_calendar, sync_mail
 from eca.people import create_self_person, resolve_address
 from eca.platform.clock import SystemClock
 from eca.platform.config import Settings
@@ -97,6 +97,11 @@ class ApiHarness:
     def drain(self) -> int:
         """Run every pending event through the production handlers (the worker's job)."""
         return asyncio.run(_drain(self))
+
+    def sync_calendar(self, user: ApiUser, events: Sequence[NormalizedEvent]) -> None:
+        """Add events to the user's fake calendar and sync it over the existing fake connection."""
+        self.accounts.calendar_feed(user.email).extend(events)
+        asyncio.run(_sync_calendar(self, user))
 
     def redeliver(self, event_types: Sequence[str]) -> int:
         """Deliver every already dispatched event of these types again (duplicate dispatch, RT-08)."""
@@ -175,6 +180,22 @@ async def _connect_and_sync(h: ApiHarness, user: ApiUser) -> UUID:
         return connection_id
     finally:
         await api.dispose()
+        await worker.dispose()
+
+
+async def _sync_calendar(h: ApiHarness, user: ApiUser) -> None:
+    worker = create_engine(h.db.worker_url, pool_size=2, max_overflow=0)
+    try:
+        connection_id = h.scalar("SELECT id FROM connections WHERE user_id = %s", (user.user_id,))
+        await sync_calendar(
+            UnitOfWorkFactory(create_session_factory(worker)),
+            h.connectors,
+            user_id=user.user_id,
+            connection_id=connection_id,
+            now=datetime.datetime.now(datetime.UTC),
+            owner="api-harness-calendar",
+        )
+    finally:
         await worker.dispose()
 
 
