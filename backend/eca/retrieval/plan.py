@@ -74,6 +74,7 @@ class Plan:
     intent: str
     planner: str  # rules | ai | fallback | fixed
     person_names: tuple[str, ...] = ()
+    person_ids: tuple[UUID, ...] = ()  # fixed anchors (People page, reply guidance; planner "fixed")
     person_role: str = "any"  # owner | counterparty | any
     pronoun: str | None = None  # person | thing: resolve through the focus map
     topic: str | None = None
@@ -101,7 +102,7 @@ class Plan:
             "scenario": self.scenario,
             "tier": self.tier,
             "planner": self.planner,
-            "person_count": len(self.person_names),
+            "person_count": len(self.person_names) + len(self.person_ids),
             "person_role": self.person_role,
             "pronoun": self.pronoun,
             "has_topic": self.topic is not None,

@@ -12,10 +12,12 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from eca import attention, communication, ingestion, meetings, people, privacy, work
+from eca import attention, communication, ingestion, meetings, people, privacy, retrieval, work
+from eca.api.assistant import _card_json
 from eca.api.common import (
     Cursors,
     Factory,
+    IdempotencyKey,
     IfMatch,
     User,
     as_json,
@@ -24,10 +26,12 @@ from eca.api.common import (
     now,
     page_body,
     parse_if_match,
+    request_key,
 )
 from eca.api.work import item_json
 from eca.platform.errors import NotFound, ValidationFailed
 from eca.platform.feedback import record_feedback
+from eca.platform.uow import UnitOfWork
 
 router = APIRouter(prefix="/api/v1")
 
@@ -120,6 +124,73 @@ async def patch_conversation(
 
 
 # --- people and organizations -------------------------------------------------------------------
+# Phase 3 (slice 3.4, BACKEND_DESIGN.md §16.8): every profile field carries its origin (user,
+# computed or inferred); corrections are user events (context_events, authority 5) plus
+# feedback_events and PersonChanged, written in the request's single transaction.
+
+
+def person_json(p: people.PersonSummary) -> dict[str, Any]:
+    profile = p.profile or {}
+    return as_json(
+        {
+            "id": p.id,
+            "display_name": p.display_name,
+            "primary_email": p.primary_email,
+            "organization_id": p.organization_id,
+            "is_self": p.is_self,
+            "last_interaction_at": p.last_interaction_at,
+            "version": p.version,
+            "user_fields": list(p.user_fields),
+            "importance": {
+                "user": p.importance_user,
+                "inferred": p.importance_inferred,
+                "origin": "user" if p.importance_user is not None else "computed",
+            },
+            "relationship_type": {
+                "value": p.relationship_type,
+                "origin": "user" if p.relationship_type else None,
+            },
+            "role_title": {
+                "value": p.role_title,
+                "origin": ("user" if p.role_origin == "user" else ("inferred" if p.role_title else None)),
+            },
+            "profile": {
+                "origin": "computed",
+                "computed_at": p.profile_computed_at,
+                "open_mine": profile.get("open_mine", 0),
+                "open_theirs": profile.get("open_theirs", 0),
+                "inbound_30d": profile.get("inbound_30d", 0),
+                "outbound_30d": profile.get("outbound_30d", 0),
+                "meetings_30d": profile.get("meetings_30d", 0),
+                "interaction_recency_days": profile.get("interaction_recency_days"),
+                "active_topics": profile.get("active_topics", []),
+                "last_meeting_at": profile.get("last_meeting_at"),
+                "next_meeting_at": profile.get("next_meeting_at"),
+                "terms": profile.get("terms", {}),
+            }
+            if p.profile
+            else None,
+        }
+    )
+
+
+async def _person_event(
+    uow: UnitOfWork, person_id: UUID, event_type: str, key: str | None, payload: dict[str, Any]
+) -> None:
+    """The user event of a person correction (BACKEND_DESIGN.md §9.9): ``work`` writes
+    ``context_events``; ``people`` must not import ``work``, so the composition calls both."""
+    await work.record_entity_event(
+        uow,
+        entity_type="person",
+        entity_id=person_id,
+        event_type=event_type,
+        actor="user",
+        authority=5,
+        materiality=1,
+        occurred_at=now(),
+        dedupe_key=work.user_dedupe_key(request_key(key), event_type, person_id),
+        payload=payload,
+    )
 
 
 @router.get("/people")
@@ -141,25 +212,49 @@ async def list_people(
             after=codec.decode(cursor, user_id=user.user_id, scope=scope),
             limit=limit_of(limit),
         )
-    return page_body(items, next_key, codec=codec, user=user, scope=scope)
+    return page_body([person_json(p) for p in items], next_key, codec=codec, user=user, scope=scope)
 
 
 @router.get("/people/{person_id}")
 async def get_person(person_id: UUID, user: User, factory: Factory) -> JSONResponse:
-    """Person context: profile, identifiers and the open work involving them in both directions."""
+    """Person context (S2, CONTEXT_ARCHITECTURE.md §10.2): deterministic card and profile, open
+    items both directions, recent threads, meetings, decisions. No model call. A merged person's
+    ID returns the surviving person with ``redirected_from``."""
     async with factory(user_id=user.user_id) as uow:
         detail = await people.person_detail(uow, person_id)
-        involved = await work.list_items_page(uow, person_id=detail.person.id, sort="due", limit=50)
-    body = jsonable_encoder(detail) | {
-        "they_owe_me": [item_json(i) for i in involved.items if i.direction in ("waiting_for", "delegated")],
-        "i_owe_them": [item_json(i) for i in involved.items if i.direction in ("my_commitment", "my_task")],
+        anchor = detail.person.id
+        involved: dict[UUID, work.WorkItemView] = {}
+        for pid in await people.merged_ids(uow, anchor):
+            page = await work.list_items_page(uow, person_id=pid, sort="due", limit=50)
+            involved.update({i.id: i for i in page.items})
+        plan = retrieval.Plan(intent="person", planner="fixed", person_ids=(anchor,))
+        ctx, _, _ = await retrieval.context_for(uow, plan=plan, session=retrieval.SessionState(), now=now())
+        context = await retrieval.person_context_for(ctx)
+    items = sorted(involved.values(), key=lambda i: (i.due_at is None, i.due_at or now(), str(i.id)))
+    sections: dict[str, list[dict[str, Any]]] = {}
+    for card in context.cards:
+        sections.setdefault(card.kind, []).append(_card_json(card))
+    body = person_json(detail.person) | {
+        "redirected_from": person_id if person_id != anchor else None,
+        "identifiers": detail.identifiers,
+        "organization": detail.organization,
+        "last_inbound_at": detail.last_inbound_at,
+        "last_outbound_at": detail.last_outbound_at,
+        "card": sections.get("person", [None])[0],
+        "they_owe_me": [item_json(i) for i in items if i.direction in ("waiting_for", "delegated")],
+        "i_owe_them": [item_json(i) for i in items if i.direction in ("my_commitment", "my_task")],
         "other_items": [
             item_json(i)
-            for i in involved.items
+            for i in items
             if i.direction not in ("waiting_for", "delegated", "my_commitment", "my_task")
         ],
+        "threads": sections.get("conversation", []),
+        "meetings": sections.get("meeting", []),
+        "evidence": sections.get("quote", []),
+        "decisions": [_card_json(c) for c in context.decisions],
+        "notes": list(ctx.notes),
     }
-    return JSONResponse(body, headers={"ETag": etag(detail.person.version)})
+    return JSONResponse(as_json(body), headers={"ETag": etag(detail.person.version)})
 
 
 class PatchPerson(BaseModel):
@@ -167,17 +262,38 @@ class PatchPerson(BaseModel):
     importance_user: int | None = Field(default=None, ge=1, le=5)
     role_title: str | None = Field(default=None, max_length=200)
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    relationship_type: (
+        Literal[
+            "executive",
+            "client",
+            "investor",
+            "manager",
+            "report",
+            "partner",
+            "stakeholder",
+            "colleague",
+            "vendor",
+            "other",
+            "low_priority",
+        ]
+        | None
+    ) = None
 
 
 @router.patch("/people/{person_id}")
 async def patch_person(
-    person_id: UUID, body: PatchPerson, user: User, factory: Factory, if_match: IfMatch = None
+    person_id: UUID,
+    body: PatchPerson,
+    user: User,
+    factory: Factory,
+    if_match: IfMatch = None,
+    key: IdempotencyKey = None,
 ) -> JSONResponse:
+    changes = body.model_dump(exclude_unset=True)
     async with factory(user_id=user.user_id) as uow:
-        p = await people.edit_person(
-            uow, person_id, body.model_dump(exclude_unset=True), if_match=parse_if_match(if_match)
-        )
-    return JSONResponse(jsonable_encoder(p), headers={"ETag": etag(p.version)})
+        p = await people.edit_person(uow, person_id, changes, if_match=parse_if_match(if_match))
+        await _person_event(uow, person_id, "user_edit", key, {"set": sorted(changes)})
+    return JSONResponse(person_json(p), headers={"ETag": etag(p.version)})
 
 
 class MergePerson(BaseModel):
@@ -186,7 +302,9 @@ class MergePerson(BaseModel):
 
 
 @router.post("/people/{person_id}/merge", status_code=204)
-async def merge_person(person_id: UUID, body: MergePerson, user: User, factory: Factory) -> Response:
+async def merge_person(
+    person_id: UUID, body: MergePerson, user: User, factory: Factory, key: IdempotencyKey = None
+) -> Response:
     async with factory(user_id=user.user_id) as uow:
         await people.merge_persons(uow, source_id=person_id, target_id=body.into_id)
         await record_feedback(
@@ -196,6 +314,7 @@ async def merge_person(person_id: UUID, body: MergePerson, user: User, factory: 
             action="merge",
             after={"into_id": str(body.into_id)},
         )
+        await _person_event(uow, person_id, "merged", key, {"into_id": str(body.into_id)})
     return Response(status_code=204)
 
 
@@ -206,9 +325,12 @@ class AliasBody(BaseModel):
 
 
 @router.post("/people/{person_id}/aliases", status_code=204)
-async def add_alias(person_id: UUID, body: AliasBody, user: User, factory: Factory) -> Response:
+async def add_alias(
+    person_id: UUID, body: AliasBody, user: User, factory: Factory, key: IdempotencyKey = None
+) -> Response:
     async with factory(user_id=user.user_id) as uow:
         await people.add_alias(uow, person_id, kind=body.kind, value=body.value)
+        await _person_event(uow, person_id, "alias_added", key, {"kind": body.kind})
     return Response(status_code=204)
 
 

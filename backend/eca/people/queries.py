@@ -1,24 +1,43 @@
 """People and organization read models and edits for the API (slice 1.7, BACKEND_DESIGN.md §16.5).
 
-User edits (importance, role, organization name) are USER-AUTHORED and recorded as feedback;
-merges and aliases go through the identity rules in ``service``.
+User edits (importance, role, relationship type, name, organization name) are USER-AUTHORED:
+recorded in ``persons.user_fields`` (authority 5), as feedback, and announced with
+``PersonChanged``; merges and aliases go through the identity rules in ``service``. The computed
+relationship profile (CONTEXT_ARCHITECTURE.md §5.3) is read here, never written.
 """
 
 from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import Numeric, and_, func, or_, select, update
 
 from eca.people.identity_rules import normalize_alias, normalize_email
 from eca.people.models import organizations_table, person_identifiers_table, persons_table
-from eca.people.service import _add_identifier, _lock
+from eca.people.service import _add_identifier, _lock, publish_person_changed
 from eca.platform.errors import NotFound, PreconditionFailed, ValidationFailed
 from eca.platform.feedback import record_feedback
 from eca.platform.uow import UnitOfWork
+
+RELATIONSHIP_TYPES = frozenset(
+    {
+        "executive",
+        "client",
+        "investor",
+        "manager",
+        "report",
+        "partner",
+        "stakeholder",
+        "colleague",
+        "vendor",
+        "other",
+        "low_priority",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -32,6 +51,12 @@ class PersonSummary:
     is_self: bool
     last_interaction_at: datetime.datetime | None
     version: int
+    relationship_type: str | None = None
+    role_origin: str | None = None
+    importance_inferred: float | None = None
+    user_fields: tuple[str, ...] = ()
+    profile: dict[str, Any] | None = None  # computed (CONTEXT_ARCHITECTURE.md §5.3)
+    profile_computed_at: datetime.datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +70,8 @@ class PersonDetail:
 
 
 def _summary(r: Any) -> PersonSummary:
+    stats = dict(r.interaction_stats or {})
+    profile = stats.get("profile")
     return PersonSummary(
         r.id,
         r.display_name,
@@ -55,13 +82,20 @@ def _summary(r: Any) -> PersonSummary:
         r.is_self,
         r.last_interaction_at,
         r.version,
+        relationship_type=r.relationship_type,
+        role_origin=r.role_origin,
+        importance_inferred=r.importance_inferred,
+        user_fields=tuple(r.user_fields or ()),
+        profile=dict(profile) if isinstance(profile, dict) else None,
+        profile_computed_at=r.profile_computed_at,
     )
 
 
 async def list_people_page(
     uow: UnitOfWork, *, q: str | None, sort: str, after: list[Any] | None, limit: int
 ) -> tuple[list[PersonSummary], list[Any] | None]:
-    """``sort=importance`` (user importance, then recent interaction) or ``sort=recent``."""
+    """``sort=importance`` (user importance, then inferred importance, then recent interaction) or
+    ``sort=recent``."""
     p = persons_table
     stmt = select(p).where(p.c.merged_into_id.is_(None), p.c.deleted_at.is_(None), ~p.c.is_self)
     if q:
@@ -71,27 +105,40 @@ async def list_people_page(
         )
     epoch = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
     seen = func.coalesce(p.c.last_interaction_at, epoch)
+    imp = func.coalesce(p.c.importance_user, 0)
+    inferred = func.round(func.cast(func.coalesce(p.c.importance_inferred, 0), Numeric(6, 3)), 3)
     if sort == "importance":
-        imp = func.coalesce(p.c.importance_user, 0)
-        order = [imp.desc(), seen.desc(), p.c.id]
+        order = [imp.desc(), inferred.desc(), seen.desc(), p.c.id]
         if after is not None:
-            i0, t0, id0 = int(after[0]), datetime.datetime.fromisoformat(after[1]), UUID(after[2])
+            i0, f0 = int(after[0]), Decimal(str(after[1]))
+            t0, id0 = datetime.datetime.fromisoformat(after[2]), UUID(after[3])
             stmt = stmt.where(
-                or_(imp < i0, and_(imp == i0, seen < t0), and_(imp == i0, seen == t0, p.c.id > id0))
+                or_(
+                    imp < i0,
+                    and_(imp == i0, inferred < f0),
+                    and_(imp == i0, inferred == f0, seen < t0),
+                    and_(imp == i0, inferred == f0, seen == t0, p.c.id > id0),
+                )
             )
     elif sort == "recent":
         order = [seen.desc(), p.c.id]
         if after is not None:
-            t0, id0 = datetime.datetime.fromisoformat(after[1]), UUID(after[2])
+            t0, id0 = datetime.datetime.fromisoformat(after[2]), UUID(after[3])
             stmt = stmt.where(or_(seen < t0, and_(seen == t0, p.c.id > id0)))
     else:
         raise ValidationFailed("sort must be importance or recent")
-    rows = (await uow.session.execute(stmt.order_by(*order).limit(limit + 1))).all()
+    stmt = stmt.add_columns(inferred.label("inferred_key")).order_by(*order).limit(limit + 1)
+    rows = (await uow.session.execute(stmt)).all()
     page = rows[:limit]
     next_key = None
     if len(rows) > limit and page:
         last = page[-1]
-        next_key = [last.importance_user or 0, (last.last_interaction_at or epoch).isoformat(), str(last.id)]
+        next_key = [
+            last.importance_user or 0,
+            str(last.inferred_key),
+            (last.last_interaction_at or epoch).isoformat(),
+            str(last.id),
+        ]
     return [_summary(r) for r in page], next_key
 
 
@@ -131,7 +178,7 @@ async def person_detail(uow: UnitOfWork, person_id: UUID) -> PersonDetail:
     )
 
 
-PERSON_EDITABLE = frozenset({"importance_user", "role_title", "display_name"})
+PERSON_EDITABLE = frozenset({"importance_user", "role_title", "display_name", "relationship_type"})
 
 
 async def edit_person(
@@ -143,6 +190,11 @@ async def edit_person(
     imp = changes.get("importance_user")
     if imp is not None and imp not in (1, 2, 3, 4, 5):
         raise ValidationFailed("importance_user must be 1-5 or null")
+    kind = changes.get("relationship_type")
+    if kind is not None and kind not in RELATIONSHIP_TYPES:
+        raise ValidationFailed(f"relationship_type must be one of {sorted(RELATIONSHIP_TYPES)} or null")
+    if "display_name" in changes and not (changes["display_name"] or "").strip():
+        raise ValidationFailed("display_name must not be blank")
     p = persons_table
     cur = (
         await uow.session.execute(
@@ -155,7 +207,11 @@ async def edit_person(
         raise PreconditionFailed("the person changed", details={"current_version": cur.version})
     values = dict(changes)
     if "role_title" in values:
-        values["role_origin"] = "user"
+        values["role_origin"] = "user" if values["role_title"] else None
+    # A field set to a value is user-authored (authority 5); clearing it hands it back to computation.
+    user_fields = set(cur.user_fields or ()) | {k for k, v in changes.items() if v is not None}
+    user_fields -= {k for k, v in changes.items() if v is None}
+    values["user_fields"] = sorted(user_fields)
     new = (
         await uow.session.execute(
             update(p).where(p.c.id == person_id).values(**values, version=p.c.version + 1).returning(*p.c)
@@ -169,6 +225,7 @@ async def edit_person(
         before={k: getattr(cur, k) for k in changes},
         after=changes,
     )
+    await publish_person_changed(uow, person_id, "edit", fields=list(changes))
     return _summary(new)
 
 
@@ -190,6 +247,7 @@ async def add_alias(uow: UnitOfWork, person_id: UUID, *, kind: str, value: str) 
     await record_feedback(
         uow, target_type="person", target_id=person_id, action="add_alias", after={"kind": kind}
     )
+    await publish_person_changed(uow, person_id, "alias")
 
 
 @dataclass(frozen=True)
@@ -239,6 +297,7 @@ async def importance_of(uow: UnitOfWork, person_ids: list[UUID]) -> dict[UUID, d
         select(
             p.c.id,
             p.c.importance_user,
+            p.c.importance_inferred,
             p.c.interaction_stats,
             p.c.last_outbound_at,
             p.c.is_self,
@@ -250,6 +309,7 @@ async def importance_of(uow: UnitOfWork, person_ids: list[UUID]) -> dict[UUID, d
     return {
         r.id: {
             "importance_user": r.importance_user,
+            "importance_inferred": r.importance_inferred,
             "org_importance": r.org_importance,
             "stats": dict(r.interaction_stats or {}),
             "known": r.last_outbound_at is not None or r.importance_user is not None,
@@ -257,3 +317,75 @@ async def importance_of(uow: UnitOfWork, person_ids: list[UUID]) -> dict[UUID, d
         }
         for r in rows
     }
+
+
+@dataclass(frozen=True)
+class ProfileSubject:
+    """A person whose relationship profile is computed (CONTEXT_ARCHITECTURE.md §5.3)."""
+
+    id: UUID
+    role_title: str | None
+    org_importance: int | None
+    last_interaction_at: datetime.datetime | None
+    last_inbound_at: datetime.datetime | None
+    last_outbound_at: datetime.datetime | None
+    merged_ids: tuple[UUID, ...]  # the person and everyone merged into it
+
+
+PROFILE_ACTIVE_DAYS = 180
+PROFILE_MAX_PERSONS = 2000
+
+
+async def profile_subjects(
+    uow: UnitOfWork, *, now: datetime.datetime, person_ids: list[UUID] | None = None
+) -> list[ProfileSubject]:
+    """Live, non-self persons to profile: the given ones (merged IDs redirected), else everyone
+    with an interaction in the last 180 days or an inferred importance still decaying."""
+    p, o = persons_table, organizations_table
+    stmt = (
+        select(
+            p.c.id,
+            p.c.role_title,
+            p.c.last_interaction_at,
+            p.c.last_inbound_at,
+            p.c.last_outbound_at,
+            o.c.importance_user.label("org_importance"),
+        )
+        .outerjoin(o, o.c.id == p.c.organization_id)
+        .where(
+            p.c.user_id == uow.user_id,
+            ~p.c.is_self,
+            p.c.merged_into_id.is_(None),
+            p.c.deleted_at.is_(None),
+        )
+    )
+    if person_ids is not None:
+        if not person_ids:
+            return []
+        targets = select(func.coalesce(p.c.merged_into_id, p.c.id)).where(p.c.id.in_(person_ids))
+        stmt = stmt.where(p.c.id.in_(targets))
+    else:
+        since = now - datetime.timedelta(days=PROFILE_ACTIVE_DAYS)
+        stmt = stmt.where(or_(p.c.last_interaction_at >= since, p.c.importance_inferred > 0))
+    rows = (await uow.session.execute(stmt.order_by(p.c.id).limit(PROFILE_MAX_PERSONS))).all()
+    if not rows:
+        return []
+    merged: dict[UUID, list[UUID]] = {r.id: [r.id] for r in rows}
+    for m in await uow.session.execute(
+        select(p.c.id, p.c.merged_into_id).where(
+            p.c.user_id == uow.user_id, p.c.merged_into_id.in_(list(merged))
+        )
+    ):
+        merged[m.merged_into_id].append(m.id)
+    return [
+        ProfileSubject(
+            r.id,
+            r.role_title,
+            r.org_importance,
+            r.last_interaction_at,
+            r.last_inbound_at,
+            r.last_outbound_at,
+            tuple(sorted(merged[r.id])),
+        )
+        for r in rows
+    ]

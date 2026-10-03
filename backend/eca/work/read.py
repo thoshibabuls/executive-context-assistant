@@ -422,3 +422,66 @@ async def project_hint_sources(uow: UnitOfWork) -> list[HintSource]:
     for dr in decision_rows:
         out.append(HintSource(dr.project_hint, dr.source_item_id, ()))
     return out
+
+
+@dataclass(frozen=True)
+class PersonWork:
+    """Inputs of the relationship profile (CONTEXT_ARCHITECTURE.md §5.3) for one person."""
+
+    open_mine: int  # open my_commitment / my_task involving the person (the user owes them)
+    open_theirs: int  # open waiting_for / delegated involving the person (they owe the user)
+    hints: tuple[tuple[str, datetime.datetime], ...]  # AI-derived project hints with their activity time
+
+
+MINE = ("my_commitment", "my_task")
+THEIRS = ("waiting_for", "delegated")
+
+
+async def person_work(
+    uow: UnitOfWork, person_ids: Sequence[UUID], *, since: datetime.datetime
+) -> dict[UUID, PersonWork]:
+    """Open-item counts both directions and recent project hints per person (live, not rejected)."""
+    ids = sorted(set(person_ids))
+    if not ids:
+        return {}
+    t = work_items_table
+    rows = (
+        await uow.session.execute(
+            _live_items(uow)
+            .with_only_columns(
+                t.c.owner_person_id,
+                t.c.counterparty_person_id,
+                t.c.requester_person_id,
+                t.c.direction,
+                t.c.lifecycle_status,
+                t.c.archived,
+                t.c.project_hint,
+                t.c.last_activity_at,
+                t.c.created_at,
+            )
+            .where(
+                or_(
+                    t.c.owner_person_id.in_(ids),
+                    t.c.counterparty_person_id.in_(ids),
+                    t.c.requester_person_id.in_(ids),
+                ),
+                or_(t.c.lifecycle_status.in_(OPEN_STATES), t.c.last_activity_at >= since),
+            )
+        )
+    ).all()
+    mine: dict[UUID, int] = defaultdict(int)
+    theirs: dict[UUID, int] = defaultdict(int)
+    hints: dict[UUID, list[tuple[str, datetime.datetime]]] = defaultdict(list)
+    wanted = set(ids)
+    for r in rows:
+        involved = {r.owner_person_id, r.counterparty_person_id, r.requester_person_id} & wanted
+        is_open = r.lifecycle_status in OPEN_STATES and not r.archived
+        at = r.last_activity_at or r.created_at
+        for pid in involved:
+            if is_open and r.direction in MINE:
+                mine[pid] += 1
+            elif is_open and r.direction in THEIRS:
+                theirs[pid] += 1
+            if r.project_hint and at is not None and at >= since:
+                hints[pid].append((r.project_hint, at))
+    return {pid: PersonWork(mine[pid], theirs[pid], tuple(hints[pid])) for pid in ids}

@@ -5,6 +5,8 @@
   until the user merges them (CC-41); similar names never merge (CC-42).
 - Name-only mentions resolve only within the given participants, else stay unresolved.
 - Organizations come from non-public email domains.
+- Fields the user set (``persons.user_fields``, authority 5) are never changed by header-derived
+  updates; merges, aliases and edits publish ``PersonChanged`` (Phase 3).
 
 Person creation is serialized per user with a transaction-level advisory lock, so two
 concurrent normalizations of the same new address create one person.
@@ -17,9 +19,10 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import bindparam, delete, func, select, text, update
+from sqlalchemy.dialects.postgresql import JSONB, insert
 
+from eca.people.events import PERSON_CHANGED, PersonChanged
 from eca.people.identity_rules import (
     email_domain,
     first_name,
@@ -35,7 +38,9 @@ from eca.people.models import (
     persons_table,
 )
 from eca.platform.errors import Conflict, NotFound, ValidationFailed
+from eca.platform.events import NewEvent
 from eca.platform.ids import uuid7
+from eca.platform.outbox import publish
 from eca.platform.uow import UnitOfWork
 
 _PEOPLE_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtextextended('people:' || :user_id, 0))")
@@ -202,7 +207,7 @@ _NAME_KEY_SQL = text(
     UPDATE persons
        SET display_name = :name,
            interaction_stats = jsonb_set(interaction_stats, '{name_key}', to_jsonb(CAST(:key AS text)))
-     WHERE id = :id AND NOT is_self
+     WHERE id = :id AND NOT is_self AND NOT ('display_name' = ANY(user_fields))
        AND (interaction_stats->>'name_key' IS NULL OR interaction_stats->>'name_key' < :key)
     """
 )
@@ -352,6 +357,57 @@ async def merge_persons(uow: UnitOfWork, *, source_id: UUID, target_id: UUID) ->
         update(persons_table)
         .where(persons_table.c.id == source.id)
         .values(merged_into_id=target.id, version=persons_table.c.version + 1)
+    )
+    await publish_person_changed(uow, source.id, "merge", merged_into_id=target.id)
+
+
+async def publish_person_changed(
+    uow: UnitOfWork,
+    person_id: UUID,
+    change: str,
+    *,
+    fields: Sequence[str] = (),
+    merged_into_id: UUID | None = None,
+) -> None:
+    """Outbox ``PersonChanged`` in the correction's transaction (priority and profile recompute)."""
+    await publish(
+        uow,
+        NewEvent(
+            event_type=PERSON_CHANGED,
+            aggregate_type="person",
+            aggregate_id=person_id,
+            payload=PersonChanged(
+                person_id=person_id,
+                change=change,
+                fields=tuple(sorted(fields)),
+                merged_into_id=merged_into_id,
+            ),
+        ),
+    )
+
+
+async def set_relationship_profile(
+    uow: UnitOfWork,
+    person_id: UUID,
+    *,
+    importance_inferred: float,
+    profile: dict[str, object],
+    at: datetime.datetime,
+) -> None:
+    """The computed relationship profile (CONTEXT_ARCHITECTURE.md §5.3), written for ``attention``.
+
+    COMPUTED columns only: user fields are never touched and ``version`` is not changed (the
+    version guards user edits). ``interaction_stats.importance_inferred`` mirrors the column for
+    readers of the stats document."""
+    p = persons_table
+    patch = bindparam(
+        "profile_patch", {"profile": profile, "importance_inferred": importance_inferred}, type_=JSONB
+    )
+    stats = p.c.interaction_stats.op("||")(patch)
+    await uow.session.execute(
+        update(p)
+        .where(p.c.id == person_id, p.c.user_id == uow.user_id, p.c.merged_into_id.is_(None))
+        .values(importance_inferred=importance_inferred, interaction_stats=stats, profile_computed_at=at)
     )
 
 

@@ -1,9 +1,9 @@
-"""Tables owned by ``people`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0006 and 0007."""
+"""Tables owned by ``people`` (BACKEND_DESIGN.md §5.1). Mirrors migrations 0006, 0007 and 0018."""
 
 from __future__ import annotations
 
 from sqlalchemy import REAL, Boolean, Column, DateTime, Integer, MetaData, SmallInteger, Table, Text
-from sqlalchemy.dialects.postgresql import CITEXT, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 metadata = MetaData()
@@ -32,13 +32,17 @@ persons_table = Table(
     Column("organization_id", PG_UUID(as_uuid=True)),
     Column("role_title", Text),
     Column("role_origin", Text),
+    Column("relationship_type", Text),
     Column("importance_user", SmallInteger),
+    Column("importance_inferred", REAL),
     Column("is_self", Boolean, nullable=False),
     Column("first_seen_at", DateTime(timezone=True)),
     Column("last_interaction_at", DateTime(timezone=True)),
     Column("last_inbound_at", DateTime(timezone=True)),
     Column("last_outbound_at", DateTime(timezone=True)),
     Column("interaction_stats", JSONB),
+    Column("user_fields", ARRAY(Text), nullable=False),
+    Column("profile_computed_at", DateTime(timezone=True)),
     Column("merged_into_id", PG_UUID(as_uuid=True)),
     Column("version", Integer, nullable=False),
     Column("created_at", DateTime(timezone=True)),

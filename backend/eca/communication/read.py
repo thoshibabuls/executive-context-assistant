@@ -220,3 +220,61 @@ async def sender_of_sources(uow: UnitOfWork, source_item_ids: list[UUID]) -> dic
         )
     )
     return {r.source_item_id: r.sender_person_id for r in rows}
+
+
+@dataclass(frozen=True)
+class InteractionCounts:
+    inbound: int  # messages the person sent to the user
+    outbound: int  # messages the user sent to the person (To or Cc)
+
+
+async def interaction_counts(
+    uow: UnitOfWork, person_ids: list[UUID], *, since: datetime.datetime
+) -> dict[UUID, InteractionCounts]:
+    """Two-way mail per person since ``since`` (relationship profile, CONTEXT_ARCHITECTURE.md §5.3)."""
+    if not person_ids:
+        return {}
+    m, mp = messages_table, message_participants_table
+    inbound = dict(
+        (r.sender_person_id, int(r.n))
+        for r in await uow.session.execute(
+            select(m.c.sender_person_id, func.count().label("n"))
+            .where(
+                m.c.user_id == uow.user_id,
+                m.c.direction == "inbound",
+                m.c.sender_person_id.in_(person_ids),
+                m.c.sent_at >= since,
+                m.c.deleted_at.is_(None),
+            )
+            .group_by(m.c.sender_person_id)
+        )
+    )
+    outbound = dict(
+        (r.person_id, int(r.n))
+        for r in await uow.session.execute(
+            select(mp.c.person_id, func.count(func.distinct(m.c.id)).label("n"))
+            .join(m, m.c.id == mp.c.message_id)
+            .where(
+                m.c.user_id == uow.user_id,
+                m.c.direction == "outbound",
+                mp.c.role.in_(("to", "cc")),
+                mp.c.person_id.in_(person_ids),
+                m.c.sent_at >= since,
+                m.c.deleted_at.is_(None),
+            )
+            .group_by(mp.c.person_id)
+        )
+    )
+    return {p: InteractionCounts(inbound.get(p, 0), outbound.get(p, 0)) for p in person_ids}
+
+
+async def message_participant_ids(uow: UnitOfWork, message_id: UUID) -> list[UUID]:
+    """Sender and recipients of one message (profile recompute on interaction)."""
+    mp = message_participants_table
+    rows = await uow.session.execute(
+        select(mp.c.person_id)
+        .where(mp.c.user_id == uow.user_id, mp.c.message_id == message_id)
+        .distinct()
+        .order_by(mp.c.person_id)
+    )
+    return [r.person_id for r in rows]

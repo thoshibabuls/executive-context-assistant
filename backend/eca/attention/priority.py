@@ -92,7 +92,10 @@ def importance(person: dict[str, Any] | None) -> tuple[float, float, bool]:
         return 0.0, 0.0, False
     user = person.get("importance_user")
     stats = person.get("stats") or {}
-    inferred = float(stats.get("importance_inferred", 0.0) or 0.0)
+    inferred = person.get("importance_inferred")
+    if inferred is None:  # profiles computed before slice 3.4 kept it in the stats document only
+        inferred = stats.get("importance_inferred", 0.0)
+    inferred = float(inferred or 0.0)
     sender = max((user or 0) / 5.0, min(max(inferred, 0.0), 1.0))
     org = (person.get("org_importance") or 0) / 5.0
     return sender, org, bool(person.get("known")) or bool(person.get("is_self"))

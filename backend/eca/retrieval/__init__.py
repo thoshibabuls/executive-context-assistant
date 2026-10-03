@@ -47,6 +47,7 @@ from eca.retrieval.plan import (
 from eca.retrieval.planner import candidate_names, plan_by_rules, plan_question
 from eca.retrieval.purge import purge_user
 from eca.retrieval.registry import all_retrievers
+from eca.retrieval.retrievers import PersonContextPage, person_context_for
 from eca.retrieval.search import ChunkHit, SearchFilters, hybrid_search, ts_terms
 from eca.retrieval.tasks import INDEX_MEETING_HANDLER, INDEX_MESSAGE_HANDLER, INDEX_REMOVED_HANDLER
 from eca.retrieval.temporal import TimeWindow
@@ -92,6 +93,7 @@ __all__ = [
     "NetChange",
     "Packet",
     "PacketItem",
+    "PersonContextPage",
     "Plan",
     "ProjectContextPage",
     "ReembedReport",
@@ -123,6 +125,7 @@ __all__ = [
     "meeting_target",
     "message_target",
     "needs_discovery",
+    "person_context_for",
     "plan_by_rules",
     "plan_question",
     "plan_window",

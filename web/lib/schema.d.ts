@@ -481,7 +481,9 @@ export interface paths {
         };
         /**
          * Get Person
-         * @description Person context: profile, identifiers and the open work involving them in both directions.
+         * @description Person context (S2, CONTEXT_ARCHITECTURE.md §10.2): deterministic card and profile, open
+         *     items both directions, recent threads, meetings, decisions. No model call. A merged person's
+         *     ID returns the surviving person with ``redirected_from``.
          */
         get: operations["get_person_api_v1_people__person_id__get"];
         put?: never;
@@ -927,6 +929,8 @@ export interface components {
             display_name?: string | null;
             /** Importance User */
             importance_user?: number | null;
+            /** Relationship Type */
+            relationship_type?: ("executive" | "client" | "investor" | "manager" | "report" | "partner" | "stakeholder" | "colleague" | "vendor" | "other" | "low_priority") | null;
             /** Role Title */
             role_title?: string | null;
         };
@@ -2033,6 +2037,7 @@ export interface operations {
             query?: never;
             header?: {
                 "If-Match"?: string | null;
+                "Idempotency-Key"?: string | null;
             };
             path: {
                 person_id: string;
@@ -2068,7 +2073,9 @@ export interface operations {
     add_alias_api_v1_people__person_id__aliases_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path: {
                 person_id: string;
             };
@@ -2101,7 +2108,9 @@ export interface operations {
     merge_person_api_v1_people__person_id__merge_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path: {
                 person_id: string;
             };

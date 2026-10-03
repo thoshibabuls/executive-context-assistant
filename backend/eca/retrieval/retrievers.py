@@ -113,6 +113,11 @@ async def resolve_people(ctx: Ctx) -> PersonResolution:
     """Names (or a pronoun) → persons; ambiguity → focus choice or a clarification question."""
     anchors: list[PersonRef] = []
     unresolved: list[str] = []
+    if ctx.plan.person_ids:  # fixed anchors; merged IDs redirect to the surviving person
+        fixed = await people.get_persons(ctx.uow, list(ctx.plan.person_ids))
+        for pid in ctx.plan.person_ids:
+            if pid in fixed and fixed[pid].id not in {a.id for a in anchors}:
+                anchors.append(fixed[pid])
     names = list(ctx.plan.person_names)
     if not names and ctx.plan.pronoun == "person":
         focused = next((f for f in ctx.session.focus if f.type == "person"), None)
@@ -473,6 +478,31 @@ async def person_context(ctx: Ctx) -> Retrieved:
         )
     _unresolved_note(ctx, who.unresolved)
     return Retrieved(items, True, unresolved=who.unresolved)
+
+
+@dataclass(frozen=True)
+class PersonContextPage:
+    """S2 for the People page (CONTEXT_ARCHITECTURE.md §10.2): the retriever's cards with a fixed
+    anchor, plus decisions from the threads shared with the person. Deterministic."""
+
+    person_id: UUID
+    cards: list[PacketItem]
+    decisions: list[PacketItem]
+    matched: bool
+
+
+async def person_context_for(ctx: Ctx) -> PersonContextPage:
+    """``ctx.plan.person_ids`` holds the person; the page reuses the S2 retriever unchanged."""
+    got = await person_context(ctx)
+    anchor = next((f.id for f in ctx.focus if f.type == "person"), None)
+    decisions: list[PacketItem] = []
+    if anchor is not None:
+        ids = await people.merged_ids(ctx.uow, anchor)
+        since = ctx.now - datetime.timedelta(days=PERSON_TIMELINE_DAYS)
+        threads = await communication.conversations_with_people(ctx.uow, ids, since=since, limit=10)
+        for d in await work.decisions_for_conversations(ctx.uow, [c.id for c in threads]):
+            decisions.append(cards.decision_card(d, ctx.tz))
+    return PersonContextPage(anchor or ctx.plan.person_ids[0], got.items, decisions, got.matched)
 
 
 # ---------------------------------------------------------------- S6 cross-email status

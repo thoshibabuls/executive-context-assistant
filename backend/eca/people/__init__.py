@@ -4,14 +4,17 @@ Owns (single writer, BACKEND_DESIGN.md §5.1): persons, person_identifiers, orga
 Other modules import only from this package root.
 """
 
+from eca.people.events import PERSON_CHANGED, PersonChanged
 from eca.people.identity_rules import is_public_domain, normalize_alias, normalize_email
 from eca.people.names import NameMatch, match_names
 from eca.people.purge import purge_mentions, purge_mentions_for_sources, purge_user
 from eca.people.queries import (
     PERSON_EDITABLE,
+    RELATIONSHIP_TYPES,
     OrganizationView,
     PersonDetail,
     PersonSummary,
+    ProfileSubject,
     add_alias,
     edit_organization,
     edit_person,
@@ -19,6 +22,7 @@ from eca.people.queries import (
     list_organizations,
     list_people_page,
     person_detail,
+    profile_subjects,
 )
 from eca.people.service import (
     AliasEntry,
@@ -34,23 +38,29 @@ from eca.people.service import (
     mentions_of,
     merge_persons,
     merged_ids,
+    publish_person_changed,
     record_interaction,
     record_mentions,
     replace_alias_mentions,
     resolve_address,
     resolve_name,
+    set_relationship_profile,
 )
 
 __all__ = [
+    "PERSON_CHANGED",
     "PERSON_EDITABLE",
+    "RELATIONSHIP_TYPES",
     "AliasEntry",
     "MentionCount",
     "MentionIn",
     "NameMatch",
     "OrganizationView",
+    "PersonChanged",
     "PersonDetail",
     "PersonRef",
     "PersonSummary",
+    "ProfileSubject",
     "add_alias",
     "alias_catalog",
     "aliases_of",
@@ -71,6 +81,8 @@ __all__ = [
     "normalize_alias",
     "normalize_email",
     "person_detail",
+    "profile_subjects",
+    "publish_person_changed",
     "purge_mentions",
     "purge_mentions_for_sources",
     "purge_user",
@@ -79,4 +91,5 @@ __all__ = [
     "replace_alias_mentions",
     "resolve_address",
     "resolve_name",
+    "set_relationship_profile",
 ]

@@ -119,3 +119,59 @@ export type ChatEvent =
   | { name: "delta"; data: { text: string } }
   | { name: "final"; data: { message: ChatMessage } }
   | { name: "error"; data: { code: string; title: string } };
+
+// People (slice 3.4, BACKEND_DESIGN.md §16.8). Every profile field states its origin: "user"
+// (you set it), "computed" (counted from your mail, meetings and items) or "inferred" (AI-derived).
+export type Origin = "user" | "computed" | "inferred" | null;
+
+export type PersonProfile = {
+  origin: "computed";
+  computed_at: string | null;
+  open_mine: number;
+  open_theirs: number;
+  inbound_30d: number;
+  outbound_30d: number;
+  meetings_30d: number;
+  interaction_recency_days: number | null;
+  active_topics: { text: string; origin: "inferred" | "computed" }[];
+  last_meeting_at: string | null;
+  next_meeting_at: string | null;
+};
+
+export type PersonRow = {
+  id: string;
+  display_name: string | null;
+  primary_email: string | null;
+  last_interaction_at: string | null;
+  version: number;
+  user_fields: string[];
+  importance: { user: number | null; inferred: number | null; origin: Origin };
+  relationship_type: { value: string | null; origin: Origin };
+  role_title: { value: string | null; origin: Origin };
+  profile: PersonProfile | null;
+};
+
+export type ContextCard = {
+  kind: string;
+  entity_id: string | null;
+  line: string;
+  data_class: string;
+  claim_kind: string;
+  user_backed: boolean;
+  source_item_ids: string[];
+  group: string | null;
+};
+
+export type PersonContext = PersonRow & {
+  redirected_from: string | null;
+  organization: { id: string; name: string; domain: string | null } | null;
+  card: ContextCard | null;
+  they_owe_me: WorkItem[];
+  i_owe_them: WorkItem[];
+  other_items: WorkItem[];
+  threads: ContextCard[];
+  meetings: ContextCard[];
+  evidence: ContextCard[];
+  decisions: ContextCard[];
+  notes: string[];
+};

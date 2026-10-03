@@ -584,6 +584,30 @@
       ],
       "title": "Importance User"
      },
+     "relationship_type": {
+      "anyOf": [
+       {
+        "enum": [
+         "executive",
+         "client",
+         "investor",
+         "manager",
+         "report",
+         "partner",
+         "stakeholder",
+         "colleague",
+         "vendor",
+         "other",
+         "low_priority"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Relationship Type"
+     },
      "role_title": {
       "anyOf": [
        {
@@ -2286,7 +2310,7 @@
   },
   "/api/v1/people/{person_id}": {
    "get": {
-    "description": "Person context: profile, identifiers and the open work involving them in both directions.",
+    "description": "Person context (S2, CONTEXT_ARCHITECTURE.md \u00a710.2): deterministic card and profile, open\nitems both directions, recent threads, meetings, decisions. No model call. A merged person's\nID returns the surviving person with ``redirected_from``.",
     "operationId": "get_person_api_v1_people__person_id__get",
     "parameters": [
      {
@@ -2350,6 +2374,22 @@
        ],
        "title": "If-Match"
       }
+     },
+     {
+      "in": "header",
+      "name": "Idempotency-Key",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Idempotency-Key"
+      }
      }
     ],
     "requestBody": {
@@ -2398,6 +2438,22 @@
        "title": "Person Id",
        "type": "string"
       }
+     },
+     {
+      "in": "header",
+      "name": "Idempotency-Key",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Idempotency-Key"
+      }
      }
     ],
     "requestBody": {
@@ -2440,6 +2496,22 @@
        "format": "uuid",
        "title": "Person Id",
        "type": "string"
+      }
+     },
+     {
+      "in": "header",
+      "name": "Idempotency-Key",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Idempotency-Key"
       }
      }
     ],
