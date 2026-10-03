@@ -27,6 +27,7 @@ Intent = Literal[
     "what_changed",
     "next_action",
     "email_context",
+    "reply_guidance",
     "unsupported",
 ]
 Tier = Literal["deterministic", "T1", "T2"]
@@ -45,6 +46,7 @@ INTENT_SCENARIO: dict[str, str] = {
     "what_changed": "S11",
     "next_action": "S12",
     "email_context": "S1",
+    "reply_guidance": "RG",
     "unsupported": "none",
 }
 INTENT_TIER: dict[str, Tier] = {
@@ -61,6 +63,7 @@ INTENT_TIER: dict[str, Tier] = {
     "what_changed": "T2",
     "next_action": "T2",
     "email_context": "deterministic",
+    "reply_guidance": "T2",
     "unsupported": "deterministic",
 }
 LIST_INTENTS = frozenset(

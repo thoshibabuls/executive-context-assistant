@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from eca.api.assistant import router as assistant_router
 from eca.api.auth import router as auth_router
+from eca.api.chat import guidance_router
 from eca.api.chat import router as chat_router
 from eca.api.connections import router as connections_router
 from eca.api.context import router as context_router
@@ -111,6 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(assistant_router)
     app.include_router(projects_router)
     app.include_router(chat_router)
+    app.include_router(guidance_router)
     app.include_router(reminders_router)
     return app
 

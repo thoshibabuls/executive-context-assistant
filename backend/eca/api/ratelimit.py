@@ -14,7 +14,7 @@ from uuid import UUID
 
 from eca.platform.errors import RateLimited
 
-LIMITS_PER_MINUTE = {"chat": 20, "summary": 10}
+LIMITS_PER_MINUTE = {"chat": 20, "reply_guidance": 10, "summary": 10}
 
 
 @dataclass

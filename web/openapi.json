@@ -789,6 +789,25 @@
     "title": "ReadBody",
     "type": "object"
    },
+   "ReplyGuidanceBody": {
+    "additionalProperties": false,
+    "properties": {
+     "instructions": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Instructions"
+     }
+    },
+    "title": "ReplyGuidanceBody",
+    "type": "object"
+   },
    "SnoozeBody": {
     "additionalProperties": false,
     "properties": {
@@ -1818,6 +1837,69 @@
      }
     },
     "summary": "Mark Handled"
+   }
+  },
+  "/api/v1/conversations/{conversation_id}/reply-guidance": {
+   "post": {
+    "description": "AI-08 guidance with a copy-only draft: never sent, never written to Gmail (read-only scopes).\n``Idempotency-Key`` required; 10 requests per minute.",
+    "operationId": "reply_guidance_api_v1_conversations__conversation_id__reply_guidance_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "conversation_id",
+      "required": true,
+      "schema": {
+       "format": "uuid",
+       "title": "Conversation Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "header",
+      "name": "Idempotency-Key",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Idempotency-Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ReplyGuidanceBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "text/event-stream": {}
+      },
+      "description": "sources, then final or error"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Reply Guidance"
    }
   },
   "/api/v1/conversations/{conversation_id}/summary": {

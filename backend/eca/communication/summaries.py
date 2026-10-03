@@ -326,3 +326,44 @@ async def release_summary_claim(
         )
         .values(**values)
     )
+
+
+async def last_messages(uow: UnitOfWork, conversation_id: UUID, *, limit: int = 3) -> list[SummaryMessage]:
+    """The thread's newest live messages, oldest first, clean text (reply guidance, §5.9). A message
+    whose body retention purged falls back to its AI-01 gist."""
+    m = messages_table
+    rows = (
+        await uow.session.execute(
+            select(
+                m.c.id,
+                m.c.source_item_id,
+                m.c.sent_at,
+                m.c.sender_person_id,
+                m.c.direction,
+                m.c.body_clean,
+                m.c.triage,
+            )
+            .where(
+                m.c.user_id == uow.user_id, m.c.conversation_id == conversation_id, m.c.deleted_at.is_(None)
+            )
+            .order_by(m.c.sent_at.desc(), m.c.id.desc())
+            .limit(limit)
+        )
+    ).all()
+    out = []
+    for n, r in enumerate(reversed(rows), start=1):
+        gist = str((r.triage or {}).get("gist") or "")
+        body = r.body_clean or ""
+        out.append(
+            SummaryMessage(
+                f"M{n}",
+                r.id,
+                r.source_item_id,
+                r.sent_at,
+                r.sender_person_id,
+                r.direction,
+                body or gist,
+                not body,
+            )
+        )
+    return out

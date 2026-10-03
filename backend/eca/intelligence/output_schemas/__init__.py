@@ -11,6 +11,7 @@ from eca.intelligence.output_schemas.email_extract import (
     Triage,
 )
 from eca.intelligence.output_schemas.plan_query import PlanQuery
+from eca.intelligence.output_schemas.reply_guidance import ReplyGuidance
 from eca.intelligence.output_schemas.thread_summary import KeyPoint, ThreadSummary
 
 __all__ = [
@@ -22,6 +23,7 @@ __all__ = [
     "KeyPoint",
     "Mention",
     "PlanQuery",
+    "ReplyGuidance",
     "Statement",
     "StatusSignal",
     "ThreadSummary",

@@ -1,5 +1,5 @@
 """Interactive AI calls: AI-05 planner, AI-06 lookups, AI-07 synthesis (chat), and AI-03 thread
-summaries (Phase 3) (AI_PIPELINE.md §3, §5.7-§5.9, §7, §11).
+summaries and AI-08 reply guidance (Phase 3) (AI_PIPELINE.md §3, §5.7-§5.9, §7, §11).
 
 Each call goes through ``AIClient`` (role registry, cassettes, ``ai_calls`` meter) with the
 interactive attempt policy: the primary model, one retry, one fallback call, then degradation.
@@ -20,6 +20,8 @@ from eca.intelligence.output_schemas.answer_lookup import SCHEMA_VERSION as ANSW
 from eca.intelligence.output_schemas.answer_lookup import Answer
 from eca.intelligence.output_schemas.plan_query import SCHEMA_VERSION as PLAN_SCHEMA
 from eca.intelligence.output_schemas.plan_query import PlanQuery
+from eca.intelligence.output_schemas.reply_guidance import SCHEMA_VERSION as REPLY_SCHEMA
+from eca.intelligence.output_schemas.reply_guidance import ReplyGuidance
 from eca.intelligence.output_schemas.thread_summary import SCHEMA_VERSION as SUMMARY_SCHEMA
 from eca.intelligence.output_schemas.thread_summary import ThreadSummary
 from eca.intelligence.provider.attempts import Degraded, run_interactive
@@ -131,5 +133,24 @@ async def run_thread_summary(
         schema_version=SUMMARY_SCHEMA,
         output_model=ThreadSummary,
         content=f"MESSAGES:\n{messages_block}",
+        user_id=user_id,
+    )
+
+
+REPLY_GUIDANCE_PROMPT_VERSION = "reply_guidance/v1"
+
+
+async def run_reply_guidance(
+    client: AIClient, packet_text: str, *, user_id: UUID | None
+) -> InteractiveCall[ReplyGuidance]:
+    """AI-08 (T2) over the reply-guidance packet (AI_PIPELINE.md §5.9): sections of claims and a
+    copy-only draft. The caller verifies the claims and labels the draft as a suggestion."""
+    return await _interactive(
+        client,
+        role="reply_guidance",
+        prompt_version=REPLY_GUIDANCE_PROMPT_VERSION,
+        schema_version=REPLY_SCHEMA,
+        output_model=ReplyGuidance,
+        content=f"PACKET:\n{packet_text}",
         user_id=user_id,
     )

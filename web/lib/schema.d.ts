@@ -300,6 +300,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conversations/{conversation_id}/reply-guidance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reply Guidance
+         * @description AI-08 guidance with a copy-only draft: never sent, never written to Gmail (read-only scopes).
+         *     ``Idempotency-Key`` required; 10 requests per minute.
+         */
+        post: operations["reply_guidance_api_v1_conversations__conversation_id__reply_guidance_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/{conversation_id}/summary": {
         parameters: {
             query?: never;
@@ -1152,6 +1173,11 @@ export interface components {
             /** Ids */
             ids?: string[] | null;
         };
+        /** ReplyGuidanceBody */
+        ReplyGuidanceBody: {
+            /** Instructions */
+            instructions?: string | null;
+        };
         /** SnoozeBody */
         SnoozeBody: {
             /** Preset */
@@ -1832,6 +1858,43 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reply_guidance_api_v1_conversations__conversation_id__reply_guidance_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplyGuidanceBody"];
+            };
+        };
+        responses: {
+            /** @description sources, then final or error */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
             };
             /** @description Validation Error */
             422: {

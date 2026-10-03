@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ItemCard } from "@/components/ItemCard";
 import { ReminderRow } from "@/components/ReminderRow";
+import { ReplyGuidance } from "@/components/ReplyGuidance";
 import { ApiError, api, unwrap } from "@/lib/api";
 import type { Conversation, Person, Today, WorkItem } from "@/lib/types";
 
@@ -28,6 +29,7 @@ function ItemList({
 }
 
 function ConversationRow({ c }: { c: Conversation }) {
+  const [helping, setHelping] = useState(false);
   return (
     <li className="card">
       <p className="title">{c.subject ?? "(no subject)"}</p>
@@ -36,6 +38,11 @@ function ConversationRow({ c }: { c: Conversation }) {
         {c.priority.reasons.length > 0 && <> · {c.priority.reasons.map((r) => r.text).join(" · ")}</>}
       </p>
       {c.latest_snippet && <p className="meta">{c.latest_snippet}</p>}
+      {helping ? (
+        <ReplyGuidance conversationId={c.id} />
+      ) : (
+        <button onClick={() => setHelping(true)}>Reply guidance</button>
+      )}
     </li>
   );
 }

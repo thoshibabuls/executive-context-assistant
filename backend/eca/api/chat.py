@@ -172,3 +172,56 @@ async def message_feedback(message_id: UUID, body: Feedback, user: User, factory
     async with factory(user_id=user.user_id) as uow:
         await chat.record_message_feedback(uow, message_id, rating=body.rating, reason=body.reason)
     return Response(status_code=204)
+
+
+# --- reply guidance (slice 3.3, BACKEND_DESIGN.md §16.8) ---------------------------------------------
+
+guidance_router = APIRouter(prefix="/api/v1")
+
+
+class ReplyGuidanceBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    instructions: str | None = Field(default=None, max_length=500)  # the user's intent for the reply
+
+
+@guidance_router.post(
+    "/conversations/{conversation_id}/reply-guidance",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {}}, "description": "sources, then final or error"}},
+)
+async def reply_guidance(
+    conversation_id: UUID,
+    body: ReplyGuidanceBody,
+    request: Request,
+    user: User,
+    factory: Factory,
+    key: IdempotencyKey = None,
+) -> StreamingResponse:
+    """AI-08 guidance with a copy-only draft: never sent, never written to Gmail (read-only scopes).
+    ``Idempotency-Key`` required; 10 requests per minute."""
+    if not key:
+        raise ValidationFailed("Idempotency-Key is required for reply guidance")
+    _limiter(request).check(user.user_id, "reply_guidance")
+    instructions = (body.instructions or "").strip() or None
+    digest = request_hash(request.method, request.url.path, body.model_dump(mode="json"))
+    at = now()
+    started = await chat.start_guidance(
+        factory,
+        user_id=user.user_id,
+        conversation_id=conversation_id,
+        instructions=instructions,
+        key=key,
+        digest=digest,
+        now=at,
+    )
+    if isinstance(started, chat.GuidanceReplay):
+        return StreamingResponse(
+            _replay(chat.guidance_replay_events(started)),
+            media_type="text/event-stream",
+            headers=SSE_HEADERS | {"Idempotent-Replay": "true"},
+        )
+    return StreamingResponse(
+        _stream(chat.run_guidance(factory, _client(request), started, now=at)),
+        media_type="text/event-stream",
+        headers=SSE_HEADERS,
+    )

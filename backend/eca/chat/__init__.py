@@ -1,4 +1,4 @@
-"""Chat sessions and grounded answers.
+"""Chat sessions, grounded answers and (Phase 3) reply guidance with copy-only drafts.
 
 Owns (single writer, BACKEND_DESIGN.md §5.1): chat_sessions, chat_messages. Depends on
 ``retrieval`` (planning, packets), ``intelligence`` (AI-05/06/07 calls, budgets) and ``identity``
@@ -16,6 +16,7 @@ from eca.chat.render import (
     render_list,
     render_verified,
 )
+from eca.chat.reply import GuidanceReplay, GuidanceStart, guidance_replay_events, run_guidance, start_guidance
 from eca.chat.sessions import (
     AssistantMessage,
     MessageView,
@@ -38,6 +39,8 @@ __all__ = [
     "DEGRADED",
     "AssistantMessage",
     "ChatEvent",
+    "GuidanceReplay",
+    "GuidanceStart",
     "MessageView",
     "Rendered",
     "Replay",
@@ -51,6 +54,7 @@ __all__ = [
     "delete_session",
     "get_message",
     "get_session",
+    "guidance_replay_events",
     "list_sessions",
     "load_state",
     "merge_focus",
@@ -63,7 +67,9 @@ __all__ = [
     "render_list",
     "render_verified",
     "replay_events",
+    "run_guidance",
     "run_turn",
+    "start_guidance",
     "start_turn",
     "tokens",
     "verify",
