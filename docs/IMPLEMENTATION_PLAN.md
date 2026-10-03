@@ -119,6 +119,10 @@ Also deferred: unit tests of the new pure functions (reminder rules, keys, slots
 
 Existing test files were edited only to move the migration head constants and per-revision table sets to `0023`; they were not run. `tests/integration/test_privileges.py` remains stale (§0.6).
 
+**CI run 5** — [37098890680](https://github.com/thoshibabuls/executive-context-assistant/actions/runs/37098890680) (push of the Phase 3 commits, head `e51204c`): `lint` passed (ruff, ruff format, mypy strict, lint-imports 14 contracts, gate A0); `test` failed with 17 failed, 311 passed, 1 deselected; `secrets` failed before scanning (§0.1). One failure was caused by Phase 3: `test_chain_is_linear_and_ordered` still expected the chain 0001–0017. Its constant was moved to 0023 (commit `94727ce`, constant only).
+
+**CI run 6** — [37099095329](https://github.com/thoshibabuls/executive-context-assistant/actions/runs/37099095329) (commit `94727ce`): `lint` passed; `test` failed with 16 failed, 312 passed, 1 deselected; `secrets` failed before scanning. The 16 failures are the same tests as CI runs 3 and 4 (§0.6): 10 pipeline tests and RT-15 Batch A raise `LookupError: No resource of type AIClient` (the pipeline fixtures provide no `AIClient`), 4 RT-01 pipeline crash tests exit with 1 instead of 97, the registry isolation test sees production handlers, and the stale privilege matrix (now also missing the Phase 3 tables). No Phase 3 test exists yet; none of these runs exercises Phase 3 behaviour.
+
 **Known gaps left in the code (to resolve with the deferred tests or later slices):**
 - Phase 3 builds on untested Phase 1 and Phase 2 code; CI's `test` job was already red before Phase 3 (§0.6).
 - The reply-speed term of `importance_inferred` is not computed (`CONTEXT_ARCHITECTURE.md` §5.3); the profile is recomputed for every relevant message's participants, which adds queries per message.
