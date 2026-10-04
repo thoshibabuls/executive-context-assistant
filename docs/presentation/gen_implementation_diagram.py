@@ -1,149 +1,105 @@
-"""Figure 2: the system as built today (container and code view).
+"""Figure 2: what the system is made of today (as built, Phase 4.5).
 
 Run: python docs/presentation/gen_implementation_diagram.py  ->  implementation_diagram.html
 Then: node docs/presentation/render.cjs implementation_diagram  ->  .png (3840 x 2160) and .pdf
 
-Facts come from the code: Dockerfile (one image, api and worker commands), backend/pyproject.toml
-(FastAPI, Procrastinate, google-genai, import-linter contracts), backend/eca/* (one package per
-module, each the single writer of its tables), docker-compose.yml (pgvector/pgvector:pg17),
-eca/ingestion/tasks.py and eca/platform/jobs.py (schedules), config/models.yaml (roles).
+Box titles are plain language; the small line under each title names the exact technology or the
+code package (backend/eca/<name>). Facts: Dockerfile, backend/pyproject.toml, backend/eca/*,
+docker-compose.yml, eca/ingestion/tasks.py, config/models.yaml, TECHNICAL_DESIGN.md (Web Push).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from diagram_kit import AI, BLUE, INK, Figure, esc
+from diagram_kit import Figure, esc
 
 f = Figure()
 
-# ---- header -------------------------------------------------------------------------------
-f.text(60, 34, 1800, "Figure 2 · Container and code view · as built, October 2026 (Phase 4.5)", "kicker")
-f.text(60, 56, 1800, "One codebase, two processes, one database: the system as it runs today", "title")
-f.text(60, 102, 1800,
-       "What runs on Google sources and Gemini today. Arrows show data flow and name the protocol or "
-       "payload; a double-headed arrow means both directions.", "sub")
-
-# ---- geometry -----------------------------------------------------------------------------
-LEFT_X, LEFT_W = 60, 230
-CX, CW = 360, 1000                        # the Docker image / package container
+LEFT_X, LEFT_W = 60, 220
+CX, CW = 360, 1000
 RIGHT_X, RIGHT_W = 1460, 400
-PROC_Y, PROC_H = 220, 84
-MOD_X = [500, 787, 1074]
-MOD_W, MOD_H = 266, 88
-ROW_Y = [345, 444, 543, 642, 741]
-LAYERS = ["Sources", "Processing", "Context model", "Answers", "Foundation"]
+PROC_Y, PROC_H = 108, 128
+MOD_X = [510, 793, 1076]
+MOD_W, MOD_H = 264, 136
+ROW_Y = [254, 410, 566, 722, 878]
+LAYERS = ["Bring data in", "Understand it", "Remember it", "Use it", "Keep it safe"]
 
 
-def mid(y: int, h: int) -> float:
+def mid(y: float, h: float) -> float:
     return y + h / 2
 
 
-# ---- the container ------------------------------------------------------------------------
-f.box(CX, 156, CW, 694, "", cls="group")
-f.text(CX + 20, 168, 900, '<div class="t">eca · one Python 3.11 package, one Docker image</div>'
-       '<div class="k" style="margin-top:3px">Modular monolith · each table has exactly one owning module</div>',
-       "")
-f.box(380, PROC_Y, 460, PROC_H, "API process", "FastAPI + uvicorn · cmd: api",
-      "routes, sessions, rate limits; streams Ask answers")
-f.box(880, PROC_Y, 460, PROC_H, "Worker process", "Procrastinate · python -m eca.worker",
-      "sync and reminders every 5 min; job recovery each minute")
-f.text(380, 318, 960, "Domain modules · both processes load them · import-linter enforces the boundaries",
-       "plabel")
+# ---- the application ----------------------------------------------------------------------
+f.box(CX, 40, CW, 1000, "", cls="group")
+f.text(CX + 20, 54, 900, '<div class="t">The application</div>'
+       '<div class="k">One Python codebase · one Docker image</div>', "")
+f.box(380, PROC_Y, 470, PROC_H, "Web server", "FastAPI", "Serves the web app and streams answers")
+f.box(870, PROC_Y, 470, PROC_H, "Background worker", "Procrastinate",
+      "Syncs every 5 minutes, runs AI jobs, sends reminders")
 
 MODULES = [
-    [("connectors", "Gmail and Calendar adapters behind one protocol", ""),
-     ("connections", "OAuth grants; envelope-encrypted tokens", ""),
-     ("ingestion", "sync stages, cursors, retries", "")],
-    [("communication", "cleaning, prefilter, thread summaries", ""),
-     ("meetings", "media, transcripts, speaker matching", ""),
-     ("intelligence", "role registry, Gemini adapter, budget, meter", "ai")],
-    [("work", "work items, evidence, apply, fold", ""),
-     ("people", "persons, organizations, mentions", ""),
-     ("projects", "projects and topic matching", "")],
-    [("retrieval", "planner, hybrid search, context packet", ""),
-     ("chat", "answer turns and grounding checks", ""),
-     ("attention", "priority, reminders, briefing, Web Push", "")],
-    [("identity", "Google sign-in (OIDC), sessions", ""),
-     ("privacy", "audit log, export, deletion", ""),
-     ("platform", "database, RLS, outbox, jobs, storage", "")],
+    [("Google connectors", "connectors", "Reads Gmail and Calendar"),
+     ("Account access", "connections", "Google permissions, stored encrypted"),
+     ("Sync", "ingestion", "Tracks what is new, retries failures")],
+    [("Email processing", "communication", "Cleans, filters and summarizes"),
+     ("Meetings", "meetings", "Audio, transcripts, speakers"),
+     ("AI gateway", "intelligence", "Picks the model, enforces the budget, logs cost")],
+    [("Tasks and decisions", "work", "Each linked to the email or meeting behind it"),
+     ("People", "people", "People and organizations"),
+     ("Projects", "projects", "Groups related work")],
+    [("Search", "retrieval", "Finds the right context for a question"),
+     ("Chat", "chat", "Answers questions and checks the answers"),
+     ("Reminders", "attention", "Priorities, reminders, daily briefing")],
+    [("Sign-in", "identity", "Google sign-in and sessions"),
+     ("Privacy", "privacy", "Audit log, data export, deletion"),
+     ("Platform", "platform", "Database access, jobs, file storage")],
 ]
 for r, (layer, mods) in enumerate(zip(LAYERS, MODULES)):
-    f.text(384, ROW_Y[r] + 8, 108, esc(layer), "plabel", "line-height:1.35")
-    for c, (name, detail, cls) in enumerate(mods):
-        f.box(MOD_X[c], ROW_Y[r], MOD_W, MOD_H, name, "", esc(detail), f"mod {cls}",
-              ("AI-nn",) if cls == "ai" else ())
+    f.text(384, ROW_Y[r] + 12, 112, esc(layer), "plabel")
+    for c, (title, package, detail) in enumerate(mods):
+        ai = package == "intelligence"
+        f.box(MOD_X[c], ROW_Y[r], MOD_W, MOD_H, title, package, esc(detail), "ai" if ai else "",
+              ("AI",) if ai else ())
 
-# ---- left: people and sources -------------------------------------------------------------
-f.box(LEFT_X, PROC_Y - 6, LEFT_W, 96, "Web app", "Person · Next.js", "Today, Ask, Tasks, People", "io")
+# ---- left: the user and Google ------------------------------------------------------------
+f.box(LEFT_X, PROC_Y, LEFT_W, PROC_H, "Web app", "Next.js", "What the user sees", "io")
 f.arrow((LEFT_X + LEFT_W, mid(PROC_Y, PROC_H)), (380, mid(PROC_Y, PROC_H)), both=True)
-f.label(LEFT_X + LEFT_W + 6, PROC_Y - 4, 58, "HTTPS,<br>SSE", "center")
+f.label(LEFT_X + LEFT_W + 6, PROC_Y + 12, 68, "requests", "center")
 
-f.box(LEFT_X, ROW_Y[0], LEFT_W, MOD_H, "Gmail + Calendar", "External · read-only", "Google APIs", "ext")
+f.box(LEFT_X, ROW_Y[0], LEFT_W, MOD_H, "Gmail, Calendar", "Google APIs, read-only",
+      "Where emails and events come from", "ext")
 f.arrow((LEFT_X + LEFT_W, mid(ROW_Y[0], MOD_H)), (MOD_X[0], mid(ROW_Y[0], MOD_H)))
-f.label(LEFT_X + LEFT_W + 6, ROW_Y[0] + 4, 58, "mail,<br>events", "center")
+f.label(LEFT_X + LEFT_W + 6, ROW_Y[0] + 18, 68, "emails,<br>events", "center")
 
-f.box(LEFT_X, ROW_Y[4], LEFT_W, MOD_H, "Google sign-in", "External · OIDC", "identity and consent", "ext")
+f.box(LEFT_X, ROW_Y[4], LEFT_W, MOD_H, "Google sign-in", "OpenID Connect", "Verifies the user", "ext")
 f.arrow((LEFT_X + LEFT_W, mid(ROW_Y[4], MOD_H)), (MOD_X[0], mid(ROW_Y[4], MOD_H)))
-f.label(LEFT_X + LEFT_W + 6, ROW_Y[4] + 4, 58, "ID<br>token", "center")
+f.label(LEFT_X + LEFT_W + 6, ROW_Y[4] + 24, 68, "identity", "center")
 
-f.text(LEFT_X, ROW_Y[1] + 10, LEFT_W,
-       f'<div class="k" style="color:{BLUE};margin-bottom:6px">Where it runs</div>'
-       "<div class=\"d\">Locally today: the API and the worker run on the host, PostgreSQL runs in "
-       "Docker. Hosted deployment is still on the Phase 4.5 list.</div>", "")
+# ---- right: storage and outside services --------------------------------------------------
+db_items = ["Tasks, people, meetings, emails", "Search index: meaning and keyword", "Queue of background jobs",
+            "Each user sees only their own data"]
+f.box(RIGHT_X, PROC_Y, RIGHT_W, ROW_Y[0] + MOD_H - PROC_Y, "Database", "PostgreSQL 17 + pgvector", cls="store",
+      body='<ul class="d" style="margin:8px 0 0 20px;display:grid;gap:5px">'
+           + "".join(f"<li>{esc(t)}</li>" for t in db_items) + "</ul>")
+f.cylinder(RIGHT_X + RIGHT_W - 54, PROC_Y + 16)
+f.arrow((1340, mid(PROC_Y, PROC_H)), (RIGHT_X, mid(PROC_Y, PROC_H)), both=True)
+f.label(1346, PROC_Y + 12, 108, "reads, saves", "center")
 
-# ---- right: state and outside services ----------------------------------------------------
-store_body = ('<ul class="d" style="margin:6px 0 0 18px;display:grid;gap:3px">'
-              + "".join(f"<li>{esc(t)}</li>" for t in (
-                  "work items, people, meetings, evidence",
-                  "vectors (HNSW, 768-d) and full-text search",
-                  "Procrastinate job queue and outbox",
-                  "row-level security on every query",
-                  "ai_calls cost meter and audit log"))
-              + "</ul>")
-f.box(RIGHT_X, PROC_Y, RIGHT_W, 211, "PostgreSQL 17 + pgvector", "Data store · Docker today", cls="store",
-      body=store_body)
-f.cylinder(RIGHT_X + RIGHT_W - 50, PROC_Y + 14)
-f.arrow((CX + CW, 300), (RIGHT_X, 300), both=True)
-f.label(CX + CW + 6, 248, 88, "SQL with<br>per-user RLS", "center")
-
-f.box(RIGHT_X, ROW_Y[1], RIGHT_W, MOD_H, "Gemini API", "External · google-genai SDK",
-      "11 roles, routed by config/models.yaml", "ext")
+f.box(RIGHT_X, ROW_Y[1], RIGHT_W, MOD_H, "Google Gemini", "AI models",
+      "Reached only through the AI gateway", "ext")
 f.arrow((MOD_X[2] + MOD_W, mid(ROW_Y[1], MOD_H)), (RIGHT_X, mid(ROW_Y[1], MOD_H)), both=True)
-f.label(MOD_X[2] + MOD_W + 6, ROW_Y[1] + 2, 108, "prompts,<br>JSON", "center")
+f.label(MOD_X[2] + MOD_W + 6, ROW_Y[1] + 18, 108, "AI requests", "center")
 
-f.box(RIGHT_X, ROW_Y[3], RIGHT_W, MOD_H, "Push services", "External · Web Push, VAPID",
-      "FCM, Mozilla, Apple, Windows", "ext")
+f.box(RIGHT_X, ROW_Y[3], RIGHT_W, MOD_H, "Browser notifications", "Web Push",
+      "Reminder alerts, with no content inside", "ext")
 f.arrow((MOD_X[2] + MOD_W, mid(ROW_Y[3], MOD_H)), (RIGHT_X, mid(ROW_Y[3], MOD_H)))
-f.label(MOD_X[2] + MOD_W + 6, ROW_Y[3] + 2, 108, "empty<br>push", "center")
+f.label(MOD_X[2] + MOD_W + 6, ROW_Y[3] + 24, 108, "alerts", "center")
 
-f.box(RIGHT_X, ROW_Y[4], RIGHT_W, MOD_H, "Object storage", "Local disk · signed URLs",
-      "meeting recordings", "")
+f.box(RIGHT_X, ROW_Y[4], RIGHT_W, MOD_H, "File storage", "Local disk", "Meeting recordings")
 f.arrow((MOD_X[2] + MOD_W, mid(ROW_Y[4], MOD_H)), (RIGHT_X, mid(ROW_Y[4], MOD_H)), both=True)
-f.label(MOD_X[2] + MOD_W + 6, ROW_Y[4] + 2, 108, "recordings", "center")
-
-# ---- legend and caption -------------------------------------------------------------------
-sw = "width:30px;height:18px;border-radius:5px"
-f.raw('<div class="abs legend" style="left:60px;top:884px">'
-      f'<span><i style="{sw};border:1.5px solid #B9C3CF;background:#fff"></i>process or module (code)</span>'
-      f'<span><i style="{sw};border:1.5px solid #8A63C0;background:#F6F1FC"></i>calls a model</span>'
-      f'<span><i style="{sw};border:2px solid {INK};border-radius:10px"></i>person</span>'
-      f'<span><i style="{sw};border:1.5px solid {BLUE};background:#EAF2FB"></i>data store</span>'
-      f'<span><i style="{sw};border:1.5px dashed #8A94A3"></i>outside service</span>'
-      '<span><i><svg width="40" height="10"><path d="M8 5 H32" stroke="#5A6676" stroke-width="2"/>'
-      '<path d="M30 1 L37 5 L30 9 Z" fill="#5A6676"/><path d="M10 1 L3 5 L10 9 Z" fill="#5A6676"/></svg></i>'
-      'data flow, one or both ways</span></div>')
-f.text(60, 924, 1800,
-       "<b>Figure 2.</b> The system as it runs today. One Python package, <b>eca</b>, ships as one Docker "
-       "image and runs as two processes. The <b>API</b> serves the Next.js web app and streams answers; the "
-       "<b>worker</b> runs scheduled and queued jobs from a queue that lives in PostgreSQL, so there is no "
-       "separate message broker. Fifteen domain modules sit behind import boundaries that CI enforces, and "
-       "every table has exactly one module that writes it. <b>PostgreSQL 17 with pgvector</b> is the only "
-       "stateful service: the context model, vectors, full-text search, the job queue and the outbox share "
-       "one database under per-user row-level security (RLS). Gemini is reached only through the "
-       f'<span style="color:{AI}"><b>intelligence</b></span> module, so moving to Azure OpenAI is an adapter '
-       "change. Reminder pushes carry no content: the browser fetches it after sign-in.", "cap")
+f.label(MOD_X[2] + MOD_W + 6, ROW_Y[4] + 24, 108, "recordings", "center")
 
 out = Path(__file__).with_name("implementation_diagram.html")
-out.write_text(f.html("Figure 2 · As-built container and code view"), encoding="utf-8")
+out.write_text(f.html("What the Executive Context Assistant is made of"), encoding="utf-8")
 print(out)

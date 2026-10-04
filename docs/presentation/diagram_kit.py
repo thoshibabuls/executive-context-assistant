@@ -48,7 +48,7 @@ body{{width:{W}px;height:{H}px;background:#FFFFFF;font-family:{SANS};color:{INK}
 .title{{font-weight:600;font-size:34px;line-height:1.15;letter-spacing:-.01em;color:{INK}}}
 .sub{{font-size:16px;line-height:1.35;color:{MUTED}}}
 .panel{{background:{PANEL};border-radius:14px}}
-.plabel{{font:600 13px/1 {MONO};letter-spacing:.07em;text-transform:uppercase;color:{MUTED}}}
+.plabel{{font:600 15px/1.3 {MONO};letter-spacing:.06em;text-transform:uppercase;color:{MUTED}}}
 .plabel b{{color:{INK};font-weight:700;margin-right:6px}}
 .box{{background:#FFFFFF;border:1.5px solid {RULE};border-radius:10px;padding:9px 12px 10px;
   display:flex;flex-direction:column;gap:3px;overflow:hidden}}
@@ -57,17 +57,16 @@ body{{width:{W}px;height:{H}px;background:#FFFFFF;font-family:{SANS};color:{INK}
 .box.store{{background:{STORE_BG};border-color:{BLUE}}}
 .box.ext{{border:1.5px dashed #8A94A3;background:#FFFFFF}}
 .box.group{{background:transparent;border:1.5px solid {RULE};border-radius:14px}}
-.mod .t{{font-family:{MONO};font-size:17px;font-weight:600}}
-.t{{font-size:18px;font-weight:600;line-height:1.2;color:{INK};white-space:nowrap}}
-.k{{font:500 12.5px/1.3 {MONO};letter-spacing:.04em;text-transform:uppercase;color:{MUTED};white-space:nowrap}}
+.t{{font-size:23px;font-weight:600;line-height:1.2;color:{INK};white-space:nowrap}}
+.k{{font:500 13px/1.3 {MONO};color:{MUTED};white-space:nowrap}}
 .ai .k{{color:{AI}}}
-.d{{font-size:15px;line-height:1.3;color:{BODY}}}
-.steps{{font-size:15px;line-height:1.3;color:{BODY};display:grid;gap:5px}}
-.steps span.n{{font:600 13px/1.3 {MONO};color:{BLUE};display:inline-block;width:24px}}
-.tag{{position:absolute;font:600 13px/22px {MONO};height:22px;padding:0 7px;border-radius:6px;
+.d{{font-size:19px;line-height:1.3;color:{BODY}}}
+.steps{{font-size:19px;line-height:1.3;color:{BODY};display:grid;gap:7px}}
+.steps span.n{{font:600 14px/1.3 {MONO};color:{BLUE};display:inline-block;width:22px}}
+.tag{{position:absolute;font:600 14px/24px {MONO};height:24px;padding:0 9px;border-radius:6px;
   background:{AI};color:#FFFFFF;letter-spacing:.02em;white-space:nowrap}}
-.lbl{{position:absolute;font-size:14px;line-height:1.25;color:{BODY}}}
-.chip{{font-size:14px;line-height:1;padding:6px 10px;border-radius:7px;background:#FFFFFF;
+.lbl{{position:absolute;font-size:17px;line-height:1.25;color:{BODY}}}
+.chip{{font-size:17px;line-height:1;padding:7px 11px;border-radius:7px;background:#FFFFFF;
   border:1px solid {RULE};color:{INK};white-space:nowrap}}
 .cap{{font-size:15px;line-height:1.42;color:{BODY}}}
 .cap b{{color:{INK}}}
@@ -113,8 +112,8 @@ class Figure:
         # AI role tags sit on the top-right corner, straddling the border, so the title stays clear.
         right = x + w - 10
         for tag in reversed(tags):
-            width = 13 * 0.6 * len(tag) + 14
-            self.parts.append(f'<div class="tag" style="left:{right - width:.0f}px;top:{y - 11}px">'
+            width = 14 * 0.6 * len(tag) + 18
+            self.parts.append(f'<div class="tag" style="left:{right - width:.0f}px;top:{y - 12}px">'
                               f"{esc(tag)}</div>")
             right -= width + 6
 
